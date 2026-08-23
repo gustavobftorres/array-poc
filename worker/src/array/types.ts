@@ -119,8 +119,13 @@ export interface CreditReport {
     totalAccounts: number
     openAccounts: number
     totalBalance: number
-    totalCreditLimit: number
+    /** Balance of the revolving accounts only — the numerator of `utilization`. */
+    revolvingBalance: number
+    /** Sum of the revolving credit limits — the denominator of `utilization`. */
+    revolvingLimit: number
     utilization: number
+    installmentBalance: number
+    revolvingAccounts: number
     delinquencies: number
     inquiries6mo: number
     oldestAccountYears: number

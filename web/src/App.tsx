@@ -7,6 +7,7 @@ import { Kba } from './pages/Kba'
 import { CreditReportPage } from './pages/CreditReport'
 import { Alerts } from './pages/Alerts'
 import { Playground } from './pages/Playground'
+import { IntegrationGuide } from './pages/Integration'
 import { Inspector } from './pages/Inspector'
 
 export function App() {
@@ -21,6 +22,7 @@ export function App() {
             <Route path="/kba" element={<Kba />} />
             <Route path="/report" element={<CreditReportPage />} />
             <Route path="/alerts" element={<Alerts />} />
+            <Route path="/integracao" element={<IntegrationGuide />} />
             <Route path="/playground" element={<Playground />} />
             <Route path="/inspector" element={<Inspector />} />
             <Route path="*" element={<div className="card">Rota não encontrada.</div>} />

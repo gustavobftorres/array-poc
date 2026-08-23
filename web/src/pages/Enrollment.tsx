@@ -19,14 +19,28 @@ const DEMO = {
 const EMPTY = { firstName: '', lastName: '', dob: '', ssn: '', street: '', city: '', state: '', zip: '' }
 type Form = typeof EMPTY
 
+/**
+ * Whole years by CALENDAR — the same rule as `calendarAge` in the worker.
+ * Dividing milliseconds by 365.25 days made somebody who turns 18 today pass
+ * or fail depending on the hour of the day (W-006).
+ */
+export function calendarAge(dob: string, now = new Date()): number {
+  const [y, m, d] = dob.split('-').map(Number)
+  const [ty, tm, td] = [now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTCDate()]
+  let age = ty - y
+  if (tm < m || (tm === m && td < d)) age -= 1
+  return age
+}
+
 /** Mirrors `dobSchema` in the worker: real date, in the past, adult (V-002). */
-function dobError(dob: string): string | undefined {
+function dobError(dob: string, now = new Date()): string | undefined {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return 'Formato YYYY-MM-DD'
   const [y, m, d] = dob.split('-').map(Number)
   const dt = new Date(Date.UTC(y, m - 1, d))
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return 'Data inexistente no calendário'
-  if (dt.getTime() > Date.now()) return 'Data no futuro'
-  const age = (Date.now() - dt.getTime()) / 31_557_600_000
+  const today = now.toISOString().slice(0, 10)
+  if (dob > today) return 'Data no futuro'
+  const age = calendarAge(dob, now)
   if (age < 18) return 'O consumidor precisa ter 18 anos ou mais'
   if (age > 120) return 'Idade implausível (>120 anos)'
   return undefined

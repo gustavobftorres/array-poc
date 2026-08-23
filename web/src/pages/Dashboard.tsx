@@ -7,6 +7,9 @@ import { Card, ErrorBox, Empty, Json, Stat, TokenChip, useAsync } from '../compo
 export function Dashboard() {
   const { status, statusError, reloadStatus, session, patch } = useSession()
   const [users, setUsers] = useState<Record<string, unknown>[]>([])
+  /** The D1 grows with every test seed; show a page, not everything (W-013). */
+  const [showAll, setShowAll] = useState(false)
+  const PAGE = 10
   const seed = useAsync<Record<string, unknown>>()
 
   const loadUsers = useCallback(
@@ -103,7 +106,19 @@ export function Dashboard() {
         </Card>
       )}
 
-      <Card title={`Usuários no D1 (${users.length})`} actions={<button className="tiny" onClick={loadUsers}>Recarregar</button>}>
+      <Card
+        title={`Usuários no D1 (${users.length})`}
+        actions={
+          <div className="row">
+            {users.length > PAGE && (
+              <button className="tiny ghost" onClick={() => setShowAll((v) => !v)}>
+                {showAll ? `Mostrar só os ${PAGE} mais recentes` : `Ver todos (${users.length})`}
+              </button>
+            )}
+            <button className="tiny" onClick={loadUsers}>Recarregar</button>
+          </div>
+        }
+      >
         {users.length === 0 ? (
           <Empty>Nenhum usuário ainda. Use “Semear usuário demo” ou a tela de Enrollment.</Empty>
         ) : (
@@ -121,7 +136,7 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
+                {(showAll ? users : users.slice(0, PAGE)).map((u) => (
                   <tr key={String(u.id)}>
                     <td>{String(u.first_name)} {String(u.last_name)}</td>
                     <td>{String(u.dob)}</td>
@@ -138,6 +153,12 @@ export function Dashboard() {
                 ))}
               </tbody>
             </table>
+            {!showAll && users.length > PAGE && (
+              <p className="hint" style={{ marginBottom: 0 }}>
+                Mostrando os {PAGE} mais recentes de {users.length}. Use <strong>Ver todos</strong> para listar o resto —
+                a rota <code>GET /api/array/users</code> devolve a lista completa do D1 local.
+              </p>
+            )}
           </div>
         )}
       </Card>

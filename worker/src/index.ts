@@ -127,6 +127,32 @@ const addressSchema = z.object({
   zip: z.string().regex(/^\d{5}(-\d{4})?$/, 'zip must be 5 or 9 digits'),
 })
 
+/** Today in UTC as `[y, m, d]` — the calendar, not a millisecond count. */
+function todayParts(now = new Date()): [number, number, number] {
+  return [now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTCDate()]
+}
+
+/**
+ * Whole years between `dob` (YYYY-MM-DD) and today, by CALENDAR.
+ * Dividing milliseconds by an average year (365.25 d) made the same consumer
+ * pass or fail depending on the hour of the day: somebody turning 18 today was
+ * 17.9986 at midnight and 18.0008 in the evening (W-006).
+ */
+export function calendarAge(dob: string, now = new Date()): number {
+  const [y, m, d] = dob.split('-').map(Number)
+  const [ty, tm, td] = todayParts(now)
+  let age = ty - y
+  if (tm < m || (tm === m && td < d)) age -= 1
+  return age
+}
+
+/** True when `dob` is strictly after today's calendar date (UTC). */
+export function isFutureDate(dob: string, now = new Date()): boolean {
+  const [ty, tm, td] = todayParts(now)
+  const today = `${ty}-${String(tm).padStart(2, '0')}-${String(td).padStart(2, '0')}`
+  return dob > today
+}
+
 /**
  * A real calendar date in the past, with a plausible adult age.
  * The format regex alone used to accept `2024-13-45` and `2099-01-01`.
@@ -141,9 +167,9 @@ export const dobSchema = z
     // Round-trip catches impossible days (2023-02-30) and month overflow.
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
   }, 'dob must be a real calendar date')
-  .refine((v) => new Date(`${v}T00:00:00Z`).getTime() <= Date.now(), 'dob cannot be in the future')
+  .refine((v) => !isFutureDate(v), 'dob cannot be in the future')
   .refine((v) => {
-    const age = (Date.now() - new Date(`${v}T00:00:00Z`).getTime()) / 31_557_600_000
+    const age = calendarAge(v)
     return age >= 18 && age <= 120
   }, 'consumer must be between 18 and 120 years old')
 
@@ -312,16 +338,70 @@ app.post('/api/array/authenticate', async (c) => {
 // inside the window are served locally. Cache misses always fall through.
 // ---------------------------------------------------------------------------
 
-const TOKEN_CACHE_PREFIX = 'usertoken:'
+const TOKEN_CACHE_PREFIX = 'usertoken:v2:'
 /** Stop serving a cached token this many seconds before it actually expires. */
 const TOKEN_CACHE_MARGIN_S = 60
 
-type CachedToken = { userToken: string; clientKey: string; ttlInMinutes: number; expiresAt?: string }
+/** Query values that count as "give me a brand new token" (W-009). */
+const REFRESH_VALUES = new Set(['true', '1', 'yes', 'y', 'on'])
+export function wantsRefresh(raw: string | undefined | null): boolean {
+  return REFRESH_VALUES.has(String(raw ?? '').trim().toLowerCase())
+}
 
-async function cachedUserToken(env: Env | undefined, clientKey: string): Promise<CachedToken | null> {
+/**
+ * Everything that changes what a userToken MEANS. A token minted by the mock
+ * provider must never be served while the worker runs against the real Array
+ * (or vice-versa): that returned `200 {cached:true}` with a fixture token on
+ * the exact step the user plugs their credentials in to validate (W-001).
+ * The requested TTL is part of the identity too, so asking for 1440 minutes
+ * never silently receives a 60-minute token back (W-007).
+ */
+export function tokenCacheScope(cfg: { mode: string; appKey: string; baseUrl: string }): string {
+  return `${cfg.mode}|${cfg.appKey || 'no-appkey'}|${cfg.baseUrl}`
+}
+
+export function tokenCacheKey(
+  cfg: { mode: string; appKey: string; baseUrl: string },
+  clientKey: string,
+  ttlInMinutes: number,
+): string {
+  return `${TOKEN_CACHE_PREFIX}${tokenCacheScope(cfg)}|${ttlInMinutes}|${clientKey}`
+}
+
+type CachedToken = {
+  userToken: string
+  clientKey: string
+  ttlInMinutes: number
+  expiresAt?: string
+  /** Scope this token was minted under — re-checked on read (W-001). */
+  scope?: string
+}
+
+/** Seconds left before the token itself dies, or null when unknown. */
+function secondsLeft(expiresAt: string | undefined): number | null {
+  if (!expiresAt) return null
+  const ms = Date.parse(expiresAt)
+  if (Number.isNaN(ms)) return null
+  return Math.floor((ms - Date.now()) / 1000)
+}
+
+async function cachedUserToken(
+  env: Env | undefined,
+  clientKey: string,
+  ttlInMinutes: number,
+): Promise<CachedToken | null> {
   if (!env?.CACHE?.get) return null
+  const cfg = getConfig(env)
   try {
-    return await env.CACHE.get<CachedToken>(`${TOKEN_CACHE_PREFIX}${clientKey}`, 'json')
+    const hit = await env.CACHE.get<CachedToken>(tokenCacheKey(cfg, clientKey, ttlInMinutes), 'json')
+    if (!hit?.userToken) return null
+    // Belt and braces: even if a key from an older build survives, the stored
+    // scope has to match the scope we are running in right now.
+    if (hit.scope && hit.scope !== tokenCacheScope(cfg)) return null
+    if (hit.ttlInMinutes !== ttlInMinutes) return null
+    const left = secondsLeft(hit.expiresAt)
+    if (left !== null && left <= TOKEN_CACHE_MARGIN_S) return null
+    return hit
   } catch {
     return null
   }
@@ -329,9 +409,17 @@ async function cachedUserToken(env: Env | undefined, clientKey: string): Promise
 
 async function cacheUserToken(env: Env | undefined, value: CachedToken): Promise<void> {
   if (!env?.CACHE?.put) return
-  const ttl = Math.max(60, value.ttlInMinutes * 60 - TOKEN_CACHE_MARGIN_S)
+  const ttlSeconds = value.ttlInMinutes * 60
+  // A cache window shorter than the safety margin buys nothing and can serve a
+  // token that dies one second later (W-008).
+  if (ttlSeconds <= TOKEN_CACHE_MARGIN_S) return
+  const cfg = getConfig(env)
   try {
-    await env.CACHE.put(`${TOKEN_CACHE_PREFIX}${value.clientKey}`, JSON.stringify(value), { expirationTtl: ttl })
+    await env.CACHE.put(
+      tokenCacheKey(cfg, value.clientKey, value.ttlInMinutes),
+      JSON.stringify({ ...value, scope: tokenCacheScope(cfg) }),
+      { expirationTtl: Math.max(60, ttlSeconds - TOKEN_CACHE_MARGIN_S) },
+    )
   } catch {
     /* KV unavailable (unit tests / local) — caching is best-effort */
   }
@@ -341,8 +429,13 @@ app.post('/api/array/usertoken', async (c) => {
   const v = parse(userTokenSchema, body(c), 'body')
   if (!v.ok) return c.json(v.response, 400)
   try {
-    const hit = c.req.query('refresh') === 'true' ? null : await cachedUserToken(c.env, v.data.clientKey)
-    if (hit?.userToken) return c.json({ ...hit, cached: true })
+    const hit = wantsRefresh(c.req.query('refresh'))
+      ? null
+      : await cachedUserToken(c.env, v.data.clientKey, v.data.ttlInMinutes)
+    if (hit?.userToken) {
+      const { scope: _scope, ...rest } = hit
+      return c.json({ ...rest, cached: true })
+    }
 
     const res = await provider(c.env).createUserToken(v.data)
     await cacheUserToken(c.env, {

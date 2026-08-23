@@ -166,6 +166,81 @@ for (const [label, snippet] of Object.entries(snippets)) {
   if (badQuote) note('P1', `${label}: atributo com aspas malformadas: ${badQuote[0]}`)
 }
 
+// ---- 5. ciclo 5: injecao no valor do atributo (W-002) e pedagogia do userToken (W-003)
+{
+  const pg = await ctx.newPage()
+  await pg.goto(`${BASE}/playground`, { waitUntil: 'networkidle' })
+  await pg.getByRole('button', { name: /^Credit Overview/ }).first().click()
+  await pg.waitForTimeout(300)
+
+  // valor hostil no atributo `sandbox`
+  const row = pg.locator('.attr-row', { has: pg.locator('label', { hasText: /^sandbox$/ }) })
+  const input = row.locator('input').first()
+  await input.fill('true" onload="alert(1)')
+  await pg.waitForTimeout(300)
+
+  // nome de atributo invalido via prompt -> deve ser recusado
+  pg.once('dialog', (d) => d.accept('bad name="x'))
+  await pg.getByRole('button', { name: /\+ atributo/ }).click()
+  await pg.waitForTimeout(300)
+
+  const hostile = await pg.locator('.card', { has: pg.getByText('Snippet HTML') }).locator('pre.json').first().innerText()
+  writeFileSync(join(TMP, 'hostile.html'), `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>snippet hostil</title></head>
+<body>
+<h1 id="before">antes</h1>
+${hostile}
+<p id="after">DEPOIS</p>
+</body></html>
+`)
+
+  // um handler so seria executavel se estivesse FORA de um valor entre aspas:
+  // removemos os valores citados e so entao procuramos por on*=
+  const skeleton = hostile.replace(/"[^"]*"/g, '""')
+  if (/\son[a-z]+\s*=/i.test(skeleton)) note('P1', `W-002: snippet emitiu um handler de evento executavel -> ${skeleton.match(/[^\n]*\son[a-z]+\s*=[^\n]*/i)[0]}`)
+  else ok('W-002: valor hostil nao virou atributo/handler novo no texto do snippet')
+  if (!/sandbox="true&quot; onload=&quot;alert\(1\)"/.test(hostile)) note('P1', 'W-002: valor hostil nao foi escapado como esperado no atributo sandbox')
+  else ok('W-002: aspas do valor escapadas como &quot;')
+  if (/bad name/.test(hostile)) note('P1', 'W-002: nome de atributo invalido entrou no snippet')
+  else ok('W-002: nome de atributo invalido recusado')
+
+  // W-003: a linha do userToken existe sempre, com comentario de origem/TTL
+  if (!/userToken="/.test(hostile)) note('P1', 'W-003: snippet de componente de dados sem a linha userToken')
+  else ok('W-003: linha userToken presente')
+  if (!/authenticate\/v2\/usertoken/.test(hostile)) note('P1', 'W-003: snippet nao diz quem emite o userToken')
+  else ok('W-003: snippet cita o endpoint que emite o userToken')
+  if (!/client token/.test(hostile) || !/backend|servidor/i.test(hostile)) note('P1', 'W-003: snippet nao diz que o token vem do servidor')
+  else ok('W-003: snippet marca a fronteira servidor/browser')
+  if (!/expira|min/.test(hostile)) note('P1', 'W-003: snippet nao menciona o TTL do token')
+  else ok('W-003: snippet menciona o TTL')
+
+  // colar o snippet hostil num HTML em branco e conferir o DOM
+  const hp = await ctx.newPage()
+  const alerts = []
+  hp.on('dialog', (d) => { alerts.push(d.message()); d.dismiss() })
+  await hp.goto(`http://127.0.0.1:${port}/hostile.html`, { waitUntil: 'load' }).catch(() => {})
+  await hp.waitForTimeout(900)
+  const dom = await hp.evaluate(() => {
+    const el = document.querySelector('array-credit-overview')
+    const after = document.getElementById('after')
+    return {
+      exists: !!el,
+      attrs: el ? Object.fromEntries([...el.attributes].map((a) => [a.name, a.value])) : {},
+      afterIsBodyChild: !!(after && after.parentElement === document.body),
+    }
+  })
+  if (!dom.exists) note('P1', 'W-002: elemento nao existe na pagina do snippet hostil')
+  else if ('onload' in dom.attrs) note('P1', `W-002: atributo onload chegou ao DOM -> ${dom.attrs.onload}`)
+  else ok(`W-002: DOM sem onload; sandbox="${dom.attrs.sandbox}"`)
+  if (dom.attrs.sandbox !== 'true" onload="alert(1)') note('P2', `W-002: valor do atributo sandbox nao voltou intacto: ${JSON.stringify(dom.attrs.sandbox)}`)
+  else ok('W-002: valor do atributo preservado literalmente (nao quebrou em dois atributos)')
+  if (!dom.afterIsBodyChild) note('P1', 'W-002: arvore deslocada apos o snippet hostil')
+  else ok('W-002: arvore intacta depois do snippet hostil')
+  if (alerts.length) note('P1', `W-002: o snippet hostil disparou alert(): ${alerts.join(' | ')}`)
+  else ok('W-002: nenhum alert() disparado')
+  await hp.screenshot({ path: join(TMP, 'hostile.png'), fullPage: true })
+}
+
 await browser.close()
 server.close()
 console.log(`\n===== snippet-check: ${findings.length} achado(s) =====`)

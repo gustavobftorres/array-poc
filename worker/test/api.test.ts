@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import app from '../src/index'
+import app, { calendarAge, isFutureDate, tokenCacheKey, tokenCacheScope, wantsRefresh } from '../src/index'
 import { fakeD1 } from './fakeD1'
 import { MOCK_BASE_SCORE } from '../src/array/mock'
 
@@ -305,10 +305,69 @@ describe('mock report coherence', () => {
     expect(factor('CREDIT_AGE')).toContain(`${r.summary.oldestAccountYears} anos`)
 
     const derogatory = factor('DEROGATORY')
-    if (r.collections.length === 0) expect(derogatory).toContain('Nenhum registro negativo')
-    else expect(derogatory).toContain(`${r.collections.length} conta`)
+    const late = r.tradelines.filter((t) => t.paymentHistory.some((p) => p !== 'OK')).length
+    if (r.collections.length === 0 && late === 0) {
+      expect(derogatory).toContain('Nenhum registro negativo')
+    } else {
+      // W-012: never claim a clean file next to delinquent accounts.
+      expect(derogatory).not.toContain('Nenhum registro negativo')
+      if (late > 0) expect(derogatory).toContain(`${late} conta`)
+    }
+
+    // W-012: the payment factor is negative whenever there are late marks.
+    const payment = r.factors.find((f) => f.code === 'PAYMENT_HISTORY')!
+    expect(payment.direction).toBe(late > 0 ? 'negative' : 'positive')
+    expect(r.summary.delinquencies).toBe(late)
 
     expect(r.summary.totalAccounts).toBe(r.tradelines.length)
+  })
+
+  it('closes the utilization arithmetic with the pair it shows (W-004/W-005)', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const order = (await (await post('/api/array/report', { clientKey: user.clientKey })).json()) as {
+      reportKey: string
+      displayToken: string
+    }
+    const r = (await (
+      await call(`/api/array/report?reportKey=${order.reportKey}&displayToken=${order.displayToken}`)
+    ).json()) as {
+      summary: Record<string, number>
+      tradelines: { creditLimit: number; balance: number; accountType: string }[]
+    }
+
+    const REVOLVING = ['Credit Card', 'Charge Card', 'Revolving']
+    const rev = r.tradelines.filter((t) => REVOLVING.includes(t.accountType) && t.creditLimit > 0)
+
+    // Only revolving accounts feed the revolving aggregates — a Student Loan or
+    // a Mortgage must never inflate the "limite total (rotativo)" (W-005).
+    expect(r.summary.revolvingLimit).toBe(rev.reduce((s, t) => s + t.creditLimit, 0))
+    expect(r.summary.revolvingBalance).toBe(rev.reduce((s, t) => s + t.balance, 0))
+    expect(r.summary.revolvingAccounts).toBe(rev.length)
+    expect(r.summary).not.toHaveProperty('totalCreditLimit')
+
+    // The displayed pair reproduces the displayed percentage (W-004).
+    const derived = Math.round((r.summary.revolvingBalance / r.summary.revolvingLimit) * 1000) / 10
+    expect(r.summary.utilization).toBe(derived)
+    expect(r.summary.revolvingBalance).toBeLessThanOrEqual(r.summary.totalBalance)
+    expect(r.summary.revolvingBalance + r.summary.installmentBalance).toBe(r.summary.totalBalance)
+  })
+
+  it('score history converges to the canonical score without a 30-point rebound (W-011)', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const order = (await (await post('/api/array/report', { clientKey: user.clientKey })).json()) as {
+      reportKey: string
+      displayToken: string
+    }
+    const r = (await (
+      await call(`/api/array/report?reportKey=${order.reportKey}&displayToken=${order.displayToken}`)
+    ).json()) as { score: number; scoreHistory: { month: string; score: number }[] }
+
+    expect(r.scoreHistory).toHaveLength(12)
+    expect(r.scoreHistory[11].score).toBe(r.score)
+    const steps = r.scoreHistory.slice(1).map((p, i) => Math.abs(p.score - r.scoreHistory[i].score))
+    expect(Math.max(...steps)).toBeLessThanOrEqual(12)
+    const spread = Math.max(...r.scoreHistory.map((p) => p.score)) - Math.min(...r.scoreHistory.map((p) => p.score))
+    expect(spread).toBeLessThanOrEqual(30)
   })
 })
 
@@ -356,4 +415,179 @@ describe('sandbox mode failure handling', () => {
     expect(json.message).toBeTruthy()
     expect(json.kind).toBeTruthy()
   }, 30_000)
+})
+
+// ---------------------------------------------------------------------------
+// W-001 / W-007 / W-008 / W-009 — userToken cache
+// ---------------------------------------------------------------------------
+
+describe('userToken cache namespacing (W-001)', () => {
+  const MOCK_SCOPE = { mode: 'mock', appKey: '', baseUrl: 'https://sandbox.array.io/api' }
+  const SANDBOX_SCOPE = { mode: 'sandbox', appKey: 'APP-KEY-1', baseUrl: 'https://sandbox.array.io/api' }
+
+  it('keys the cache by mode, appKey and baseUrl', () => {
+    expect(tokenCacheScope(MOCK_SCOPE)).not.toBe(tokenCacheScope(SANDBOX_SCOPE))
+    expect(tokenCacheKey(MOCK_SCOPE, 'CK', 60)).not.toBe(tokenCacheKey(SANDBOX_SCOPE, 'CK', 60))
+    // different appKey on the same mode/baseUrl is a different scope too
+    expect(tokenCacheKey(SANDBOX_SCOPE, 'CK', 60)).not.toBe(
+      tokenCacheKey({ ...SANDBOX_SCOPE, appKey: 'APP-KEY-2' }, 'CK', 60),
+    )
+    // production baseUrl is a different scope
+    expect(tokenCacheKey(SANDBOX_SCOPE, 'CK', 60)).not.toBe(
+      tokenCacheKey({ ...SANDBOX_SCOPE, baseUrl: 'https://array.io/api' }, 'CK', 60),
+    )
+  })
+
+  it('includes the requested ttl in the key (W-007)', () => {
+    expect(tokenCacheKey(MOCK_SCOPE, 'CK', 60)).not.toBe(tokenCacheKey(MOCK_SCOPE, 'CK', 1440))
+  })
+
+  it('never serves a token minted in mock mode while running in sandbox mode', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const minted = (await (
+      await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 60 })
+    ).json()) as { userToken: string }
+    expect(minted.userToken).toBeTruthy()
+    expect(kv.size).toBe(1)
+
+    // Same KV, same clientKey, same ttl — but now with credentials, i.e. the
+    // sandbox provider. The mock token must not come back with 200/cached.
+    const res = await app.fetch(
+      new Request('http://local/api/array/usertoken', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientKey: user.clientKey, ttlInMinutes: 60 }),
+      }),
+      {
+        DB: db as unknown as D1Database,
+        CACHE: fakeKv() as unknown as KVNamespace,
+        SMARTY_AUTH_ID: 'APP',
+        SMARTY_AUTH_TOKEN: 'SECRET',
+      } as never,
+    )
+    const text = await res.text()
+    expect(res.status).not.toBe(200)
+    expect(text).not.toContain(minted.userToken)
+    expect(text).not.toContain('"cached":true')
+  }, 30_000)
+
+  it('rejects a cached entry whose stored scope does not match (defence in depth)', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 120 })
+    const [key, raw] = [...kv.entries()][0]
+    kv.set(key, JSON.stringify({ ...JSON.parse(raw), scope: 'sandbox|OTHER|https://array.io/api' }))
+
+    const again = (await (
+      await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 120 })
+    ).json()) as { cached?: boolean }
+    expect(again.cached).toBeUndefined()
+  })
+
+  it('honours the requested ttl instead of replaying a shorter cached one (W-007)', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const short = (await (
+      await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 60 })
+    ).json()) as { userToken: string; ttlInMinutes: number }
+    const long = (await (
+      await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 1440 })
+    ).json()) as { userToken: string; ttlInMinutes: number; cached?: boolean }
+    expect(long.ttlInMinutes).toBe(1440)
+    expect(long.cached).toBeUndefined()
+    expect(long.userToken).not.toBe(short.userToken)
+  })
+
+  it('does not cache a token whose lifetime is within the safety margin (W-008)', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const res = (await (
+      await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 1 })
+    ).json()) as { ttlInMinutes: number }
+    expect(res.ttlInMinutes).toBe(1)
+    expect(kv.size).toBe(0)
+  })
+
+  it('drops a cached token that is about to expire', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 120 })
+    const [key, raw] = [...kv.entries()][0]
+    kv.set(key, JSON.stringify({ ...JSON.parse(raw), expiresAt: new Date(Date.now() + 5_000).toISOString() }))
+    const again = (await (
+      await post('/api/array/usertoken', { clientKey: user.clientKey, ttlInMinutes: 120 })
+    ).json()) as { cached?: boolean }
+    expect(again.cached).toBeUndefined()
+  })
+
+  it('accepts the usual spellings of ?refresh and mints a new token (W-009)', async () => {
+    expect(['true', 'TRUE', '1', 'yes', 'on'].map(wantsRefresh)).toEqual([true, true, true, true, true])
+    expect([undefined, '', 'false', '0', 'no'].map(wantsRefresh)).toEqual([false, false, false, false, false])
+
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const a = (await (await post('/api/array/usertoken', { clientKey: user.clientKey })).json()) as { userToken: string }
+    const b = (await (await post('/api/array/usertoken?refresh=1', { clientKey: user.clientKey })).json()) as {
+      userToken: string
+      cached?: boolean
+    }
+    expect(b.cached).toBeUndefined()
+    expect(b.userToken).not.toBe(a.userToken)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// W-006 — age by calendar, not by millisecond average
+// ---------------------------------------------------------------------------
+
+describe('dob age boundaries (W-006)', () => {
+  it('turns 18 at midnight of the birthday, not at some hour of the day', () => {
+    const morning = new Date('2026-08-23T00:00:00Z')
+    const evening = new Date('2026-08-23T23:59:59Z')
+    expect(calendarAge('2008-08-23', morning)).toBe(18)
+    expect(calendarAge('2008-08-23', evening)).toBe(18)
+    expect(calendarAge('2008-08-24', morning)).toBe(17)
+    expect(calendarAge('2008-08-24', evening)).toBe(17)
+  })
+
+  it('treats an exact 120th birthday as 120 (still allowed)', () => {
+    expect(calendarAge('1906-08-23', new Date('2026-08-23T12:00:00Z'))).toBe(120)
+    expect(calendarAge('1906-08-22', new Date('2026-08-23T12:00:00Z'))).toBe(120)
+    expect(calendarAge('1905-08-23', new Date('2026-08-23T12:00:00Z'))).toBe(121)
+  })
+
+  it('handles a Feb 29 birthday in a non-leap year', () => {
+    expect(calendarAge('2004-02-29', new Date('2026-02-28T12:00:00Z'))).toBe(21)
+    expect(calendarAge('2004-02-29', new Date('2026-03-01T12:00:00Z'))).toBe(22)
+  })
+
+  it('only calls a date future when it is past today on the calendar', () => {
+    const now = new Date('2026-08-23T00:30:00Z')
+    expect(isFutureDate('2026-08-23', now)).toBe(false)
+    expect(isFutureDate('2026-08-24', now)).toBe(true)
+    expect(isFutureDate('2026-08-22', now)).toBe(false)
+  })
+
+  it('accepts a consumer who turns 18 today and rejects one who turns 18 tomorrow', async () => {
+    const iso = (d: Date) => d.toISOString().slice(0, 10)
+    const now = new Date()
+    const today18 = new Date(Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate()))
+    const tomorrow18 = new Date(Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate() + 1))
+    expect((await post('/api/array/user', { ...DEMO, dob: iso(today18) })).status).toBe(200)
+    expect((await post('/api/array/user', { ...DEMO, dob: iso(tomorrow18) })).status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// W-010 — the mock registry applies to GET /report too
+// ---------------------------------------------------------------------------
+
+describe('mock registry coherence on GET /report (W-010)', () => {
+  it('rejects an unknown clientKey with 400', async () => {
+    const user = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const order = (await (await post('/api/array/report', { clientKey: user.clientKey })).json()) as {
+      reportKey: string
+      displayToken: string
+    }
+    const ok = await call(`/api/array/report?reportKey=${order.reportKey}&displayToken=${order.displayToken}&clientKey=${user.clientKey}`)
+    expect(ok.status).toBe(200)
+
+    const bad = await call(`/api/array/report?reportKey=${order.reportKey}&displayToken=${order.displayToken}&clientKey=NAO-EXISTE`)
+    expect(bad.status).toBe(400)
+  })
 })

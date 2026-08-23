@@ -14,9 +14,15 @@ const money = (n: number) => `US$ ${n.toLocaleString('en-US')}`
 const SUMMARY_META: Record<string, { label: string; format: (v: unknown) => string }> = {
   totalAccounts: { label: 'Contas (total)', format: String },
   openAccounts: { label: 'Contas abertas', format: String },
-  totalBalance: { label: 'Saldo total', format: (v) => money(Number(v)) },
-  totalCreditLimit: { label: 'Limite total (rotativo)', format: (v) => money(Number(v)) },
+  totalBalance: { label: 'Saldo total (todas as contas)', format: (v) => money(Number(v)) },
+  // The utilization pair sits together and reproduces the percentage exactly:
+  // "saldo total vs limite só do rotativo" was arithmetic nobody could close
+  // from the screen (W-004/W-005).
+  revolvingBalance: { label: 'Saldo rotativo', format: (v) => money(Number(v)) },
+  revolvingLimit: { label: 'Limite rotativo', format: (v) => money(Number(v)) },
   utilization: { label: 'Utilização do rotativo', format: (v) => `${v}%` },
+  installmentBalance: { label: 'Saldo parcelado (hipoteca/auto/estudantil)', format: (v) => money(Number(v)) },
+  revolvingAccounts: { label: 'Contas rotativas', format: String },
   delinquencies: { label: 'Contas com atraso', format: String },
   inquiries6mo: { label: 'Consultas hard (6 meses)', format: String },
   oldestAccountYears: { label: 'Conta mais antiga', format: (v) => `${v} anos` },
@@ -204,6 +210,17 @@ export function CreditReportPage() {
             })}
           </div>
 
+          {typeof r.summary?.revolvingLimit === 'number' && r.summary.revolvingLimit > 0 && (
+            <p className="hint" style={{ marginTop: -4 }}>
+              <strong>Como fecha a conta:</strong> utilização do rotativo ={' '}
+              {money(r.summary.revolvingBalance)} ÷ {money(r.summary.revolvingLimit)} ={' '}
+              <strong>{r.summary.utilization}%</strong> — apenas as {r.summary.revolvingAccounts} contas rotativas
+              (cartão, charge card, revolving) entram nesse par. Hipoteca, financiamento de veículo e empréstimo
+              estudantil são parcelados: entram no saldo total ({money(r.summary.totalBalance)}), nunca no limite
+              rotativo.
+            </p>
+          )}
+
           <Card title="Fatores do score">
             <div className="grid cols-2">
               {(r.factors ?? []).map((f) => (
@@ -298,7 +315,12 @@ export function CreditReportPage() {
                   </table>
                 </div>
               ) : (
-                <Empty>Nenhuma cobrança — bom sinal.</Empty>
+                <Empty>
+                  Nenhuma conta em cobrança (agência).
+                  {(r.summary?.delinquencies ?? 0) > 0
+                    ? ` Atenção: isso não quer dizer ficha limpa — ${r.summary.delinquencies} conta(s) têm marcas de atraso no histórico de 24 meses.`
+                    : ' Nenhuma marca de atraso nos tradelines também.'}
+                </Empty>
               )}
             </Card>
           </div>

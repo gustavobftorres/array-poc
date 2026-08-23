@@ -30,12 +30,36 @@ export class HttpError extends Error {
  */
 const inFlight = new Map<string, Promise<unknown>>()
 
+/**
+ * Paths whose answer is stable enough to be reused for a moment. StrictMode
+ * double-mounts every effect in dev, and the two mounts are SEQUENTIAL, so the
+ * in-flight dedupe above never collapsed them: every page load asked
+ * `/status` twice (W-014 / V-008).
+ */
+const MICRO_CACHE_PATHS = new Set(['/status'])
+const MICRO_CACHE_MS = 2000
+const microCache = new Map<string, { at: number; value: unknown }>()
+
+/** Drops the memo so an explicit "Recarregar status" always hits the worker. */
+export function invalidateStatusCache(): void {
+  microCache.delete('/status')
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase()
   if (method === 'GET') {
+    if (MICRO_CACHE_PATHS.has(path)) {
+      const memo = microCache.get(path)
+      if (memo && Date.now() - memo.at < MICRO_CACHE_MS) return memo.value as T
+    }
     const pending = inFlight.get(path) as Promise<T> | undefined
     if (pending) return pending
-    const p = doRequest<T>(path, init).finally(() => inFlight.delete(path))
+    const p = doRequest<T>(path, init)
+      .then((value) => {
+        if (MICRO_CACHE_PATHS.has(path)) microCache.set(path, { at: Date.now(), value })
+        return value
+      })
+      .finally(() => inFlight.delete(path))
     inFlight.set(path, p)
     return p
   }

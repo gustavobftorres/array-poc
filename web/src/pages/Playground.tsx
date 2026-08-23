@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { APP_KEY_PLACEHOLDER, ArrayComponent, buildSnippet, isValidAppKey, useArrayEvents } from '../components/ArrayComponent'
+import {
+  APP_KEY_PLACEHOLDER,
+  ArrayComponent,
+  buildSnippet,
+  isValidAppKey,
+  isValidAttrName,
+  useArrayEvents,
+  USER_TOKEN_PLACEHOLDER,
+} from '../components/ArrayComponent'
+import { Link } from 'react-router-dom'
 import { Card, CopyButton, Empty, useAsync, ErrorBox } from '../components/ui'
 import { useSession } from '../lib/session'
 import { api } from '../lib/api'
@@ -179,6 +188,7 @@ export function Playground() {
   const [tag, setTag] = useState(CATALOG[4].tag)
   const [attrs, setAttrs] = useState<Record<string, string>>({})
   const [mounted, setMounted] = useState(false)
+  const [attrError, setAttrError] = useState('')
   const { events, clear } = useArrayEvents()
   const token = useAsync<Awaited<ReturnType<typeof api.userToken>>>()
 
@@ -202,7 +212,15 @@ export function Playground() {
     setMounted(false)
   }, [spec, appKey, session.userToken, session.clientKey, session.reportKey, session.displayToken, status?.arrayEnv])
 
-  const snippet = buildSnippet(status?.componentsCdn ?? '', spec.tag, attrs, appKey)
+  // Data components must always carry the userToken line, with or without a
+  // live session — that is the only artefact that leaves the POC (W-003).
+  const needsUserToken = Object.prototype.hasOwnProperty.call(spec.attrs, 'userToken')
+  const snippet = buildSnippet(status?.componentsCdn ?? '', spec.tag, attrs, appKey, {
+    needsUserToken,
+    userTokenTtlMinutes: token.data?.ttlInMinutes ?? 60,
+    tokenEndpoint: 'POST /authenticate/v2/usertoken (via POST /api/array/usertoken nesta POC)',
+  })
+  const invalidAttrs = Object.keys(attrs).filter((k) => !isValidAttrName(k))
 
   const mint = async () => {
     if (!session.clientKey) return
@@ -254,24 +272,54 @@ export function Playground() {
             <div className="stack" style={{ gap: 6 }}>
               {Object.entries(attrs).map(([k, v]) => (
                 <div className="attr-row" key={k}>
-                  <label style={{ margin: 0 }} className="mono">{k}</label>
-                  <input value={v} onChange={(e) => setAttrs((a) => ({ ...a, [k]: e.target.value }))} placeholder="(vazio = omitido)" />
+                  <label style={{ margin: 0 }} className="mono" htmlFor={`attr-${k}`}>{k}</label>
+                  <input
+                    id={`attr-${k}`}
+                    className={v.length > 24 ? 'mono long-value' : 'mono'}
+                    title={v || undefined}
+                    value={v}
+                    onChange={(e) => setAttrs((a) => ({ ...a, [k]: e.target.value }))}
+                    placeholder="(vazio = omitido)"
+                  />
                   <button className="tiny ghost" title="remover" onClick={() => setAttrs((a) => { const n = { ...a }; delete n[k]; return n })}>×</button>
                 </div>
               ))}
             </div>
             <div className="row" style={{ marginTop: 10 }}>
-              <button className="tiny" onClick={() => { const k = prompt('Nome do atributo'); if (k) setAttrs((a) => ({ ...a, [k]: '' })) }}>
+              <button
+                className="tiny"
+                onClick={() => {
+                  const k = prompt('Nome do atributo (letras, dígitos, - _ . :)')?.trim()
+                  if (!k) return
+                  // A name that is not a legal HTML attribute name cannot be
+                  // emitted at all — refuse it here instead of shipping broken
+                  // markup in the snippet (W-002).
+                  if (!isValidAttrName(k)) {
+                    setAttrError(`"${k}" não é um nome de atributo HTML válido (use letras, dígitos, - _ . :).`)
+                    return
+                  }
+                  setAttrError('')
+                  setAttrs((a) => ({ ...a, [k]: '' }))
+                }}
+              >
                 + atributo
               </button>
               <button className="tiny" onClick={mint} disabled={!session.clientKey || token.loading}>
                 {token.loading ? 'Gerando…' : 'Renovar userToken'}
               </button>
             </div>
-            {!session.userToken && (
+            {attrError && <p className="hint danger" style={{ marginTop: 8 }}>{attrError}</p>}
+            {invalidAttrs.length > 0 && (
+              <p className="hint danger" style={{ marginTop: 8 }}>
+                Nome(s) inválido(s) e por isso ignorado(s) no snippet: <code>{invalidAttrs.join(', ')}</code>.
+              </p>
+            )}
+            {!session.userToken && needsUserToken && (
               <p className="hint" style={{ marginTop: 8 }}>
-                Sem <code>userToken</code> na sessão. Rode o fluxo de KBA (ou o seed no Dashboard) para preencher os
-                atributos automaticamente.
+                Sem <code>userToken</code> na sessão: o snippet sai com{' '}
+                <code>{USER_TOKEN_PLACEHOLDER}</code> e com o comentário de onde ele vem. Rode o fluxo de KBA (ou o seed
+                no Dashboard) para preencher com um token real, e veja o encadeamento completo no{' '}
+                <Link to="/integracao">Guia de Integração</Link>.
               </p>
             )}
             <ErrorBox error={token.error} />
@@ -357,6 +405,14 @@ export function Playground() {
                 </>
               )}
             </p>
+            {needsUserToken && (
+              <p className="hint" style={{ marginTop: 0 }}>
+                <strong>userToken:</strong> {session.userToken ? 'o valor no snippet é o token desta sessão e expira em ~60 min' : `o snippet sai com ${USER_TOKEN_PLACEHOLDER}`}
+                . Quem emite é <strong>o seu backend</strong> (<code>POST /authenticate/v2/usertoken</code> com o client
+                token, que nunca vai ao browser) e o atributo tem que ser reinjetado a cada render.{' '}
+                <Link to="/integracao">Ver o fluxo completo →</Link>
+              </p>
+            )}
             <div className="snippet">
               <pre className="json">{snippet}</pre>
             </div>

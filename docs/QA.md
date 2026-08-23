@@ -37,11 +37,11 @@ Os binários disponíveis:
 
 | Script | O que faz | Saída |
 |---|---|---|
-| `bash scripts/smoke-api.sh` | 36 casos HTTP de abuso contra `:8787` (payload de 2 MB, JSON quebrado, chaves inexistentes, path traversal, clamp de paginação) | `pass=36 fail=0` |
-| `PW_CHROMIUM=… node scripts/e2e-smoke.mjs` | percorre as 7 telas, roda o fluxo Enrollment→KBA→Report→Alerts, testa reload, foco por Tab e mobile 390px; grava `docs/screenshots/` | lista de achados (vazia = ok) |
-| `PW_CHROMIUM=… node scripts/snippet-check.mjs` | **valida o snippet do Playground de verdade**: copia o snippet real de 5 componentes da UI, cola em HTML em branco, sobe um http-server local e abre no Chromium; afere HTML válido, custom element no DOM, ordem dos scripts, `appKey` de 36 chars, listener de `array-event` e ausência de `SyntaxError` | `snippet-check: 0 achado(s)`; artefatos em `scripts/.tmp-snippets/` |
-| `PW_CHROMIUM=… node scripts/regression-ciclo3.mjs` | checagens de navegador dos IDs V-005…V-020 (labels, auto-load, tiles, base em mock, hint do Inspector, catálogo, overflow mobile 7/7, console limpo) | uma linha por ID |
-| `npm --workspace worker run test` | vitest (42 testes) | 42 passed |
+| `bash scripts/smoke-api.sh` | 40 casos HTTP de abuso contra `:8787` (payload de 2 MB, JSON quebrado, chaves inexistentes, path traversal, clamp de paginação, registro do mock no `GET /report`, TTL/refresh do cache de userToken) | `pass=40 fail=0` |
+| `PW_CHROMIUM=… node scripts/e2e-smoke.mjs` | percorre as 8 telas (inclui `/integracao`: 4 passos, diagrama, alternância curl/TypeScript, estado da sessão), roda o fluxo Enrollment→KBA→Report→Alerts, testa reload, foco por Tab e mobile 390px; grava `docs/screenshots/` | lista de achados (vazia = ok) |
+| `PW_CHROMIUM=… node scripts/snippet-check.mjs` | **valida o snippet do Playground de verdade**: copia o snippet real de 5 componentes da UI, cola em HTML em branco, sobe um http-server local e abre no Chromium; afere HTML válido, custom element no DOM, ordem dos scripts, `appKey` de 36 chars, listener de `array-event` e ausência de `SyntaxError`. Desde o ciclo 5 também cola um snippet **hostil** (`true" onload="alert(1)` num atributo + nome de atributo inválido via `prompt`) e afere que nenhum handler executável chega ao DOM, que a árvore não desloca e que a linha `userToken` sai sempre com a explicação de origem/TTL | `snippet-check: 0 achado(s)`; artefatos em `scripts/.tmp-snippets/` |
+| `PW_CHROMIUM=… node scripts/regression-ciclo3.mjs` | checagens de navegador dos IDs V-005…V-020 (labels, auto-load, tiles, base em mock, hint do Inspector, catálogo, overflow mobile 8/8 — com `/integracao` —, console limpo) + `GET /api/status` por visita (W-014) e se o input de atributo ainda estoura (V-018/W-015) | uma linha por ID |
+| `npm --workspace worker run test` | vitest (58 testes; inclui namespace do cache de userToken, idade por calendário e aritmética do relatório) | 58 passed |
 | `npm --workspace worker run typecheck` / `npm --workspace web run build` | tsc + vite | sem erros |
 
 `scripts/.tmp-snippets/` é recriado a cada execução (HTML + PNG por componente) e não deve ser
@@ -63,7 +63,9 @@ comitado.
     -d '{"clientKey":"AAA","ttlInMinutes":60}' localhost:8788/api/array/usertoken
   # esperado: 502 kind:"blocked" (o proxy responde 403 para sandbox.array.io)
   ```
-  Atenção: esse worker **compartilha o D1 e o KV local** com o de `:8787` (ver W-001 no ciclo 3).
+  Atenção: esse worker **compartilha o D1 e o KV local** com o de `:8787` — o cache de userToken
+  agora é namespaciado por modo/appKey/baseUrl, então o compartilhamento não mais vaza tokens de um
+  modo para o outro (W-001, corrigido no ciclo 5).
 - **Inspecionar/corromper o D1 direto** (guarda de parse, V-001):
   ```bash
   DB=$(ls worker/.wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite)
@@ -78,6 +80,15 @@ comitado.
   você quer inspecionar não está na primeira página — use `?limit=200` na API em vez de caçar na UI.
 - **Reset do estado local**: `rm -rf worker/.wrangler && npm run db:migrate` (perde usuários,
   relatórios, log de auditoria e o cache KV).
-- **Cache de userToken no KV**: `?refresh=true` (exatamente essa string; `refresh=1` e
-  `refresh=TRUE` **não** invalidam) força emissão nova. Em modo mock o token é determinístico por
-  `clientKey`, então "renovar" devolve o mesmo valor — só o `expiresAt` muda.
+- **Cache de userToken no KV** (reescrito no ciclo 5): a chave é
+  `usertoken:v2:<modo>|<appKey>|<baseUrl>|<ttl>|<clientKey>` e o valor carrega o escopo, reconferido
+  na leitura. Consequências para o QA:
+  - `?refresh=true`, `?refresh=1`, `?refresh=yes`, `?refresh=on` (case-insensitive) todos forçam
+    emissão nova;
+  - em modo mock cada emissão devolve um token **diferente** (contador por `clientKey`), então
+    "Renovar userToken" muda o valor visível;
+  - pedir um `ttlInMinutes` diferente **não** reaproveita o cache (`60` e `1440` são entradas
+    distintas), e `ttlInMinutes: 1` não é cacheado;
+  - o worker de sandbox em `:8788` compartilha o KV local, mas **não** enxerga mais os tokens do
+    mock: a mesma requisição volta `502 kind:"blocked"` em vez de `200 cached:true` (era o W-001).
+    Repro em um comando: mint no `:8787`, mesma requisição no `:8788`.

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, type Status } from './api'
+import { api, invalidateStatusCache, type Status } from './api'
 
 /** Cross-page state: which consumer we are working with, plus its tokens. */
 export interface Session {
@@ -60,7 +60,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const patch = useCallback((p: Partial<Session>) => setSession((s) => ({ ...s, ...p })), [])
   const reset = useCallback(() => setSession(EMPTY), [])
-  const reloadStatus = useCallback(() => setTick((t) => t + 1), [])
+  const reloadStatus = useCallback(() => {
+    // An explicit reload must bypass the short-lived /status memo (W-014).
+    invalidateStatusCache()
+    setTick((t) => t + 1)
+  }, [])
 
   const value = useMemo(
     () => ({ session, patch, reset, status, statusError, reloadStatus }),

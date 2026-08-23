@@ -8,6 +8,7 @@ const NAV = [
   { to: '/kba', label: 'Identity / KBA', ico: '⛨' },
   { to: '/report', label: 'Credit Report', ico: '▤' },
   { to: '/alerts', label: 'Alerts / Monitoring', ico: '⚑' },
+  { to: '/integracao', label: 'Guia de Integração', ico: '⇢' },
   { to: '/playground', label: 'Web Components', ico: '◈' },
   { to: '/inspector', label: 'API Inspector', ico: '⟲' },
 ]

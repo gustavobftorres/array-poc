@@ -22,10 +22,13 @@ await go('/')
 await page.getByRole('button', { name: /Semear usuário demo|Semear/i }).first().click().catch(() => {})
 await page.waitForTimeout(1500)
 
-// V-008: chamadas por visita ao Dashboard
+// V-008/W-014: chamadas por visita ao Dashboard (uma visita = uma medição)
+await go('/enrollment')
 reqs.length = 0
-await go('/enrollment'); await go('/')
-console.log('V-008 chamadas na visita ao Dashboard:', JSON.stringify(reqs.filter((r) => !r.includes('seed'))))
+await go('/')
+console.log('V-008/W-014 chamadas numa visita ao Dashboard:', JSON.stringify(reqs.filter((r) => !r.includes('seed'))))
+const statusCalls = reqs.filter((r) => r.includes('/api/status')).length
+console.log('W-014 GET /api/status por visita:', statusCalls, statusCalls > 1 ? 'DUPLICADO' : 'ok')
 
 // V-007/V-019: auto-load das telas
 for (const [p, expect] of [['/kba', /pergunta|Q1|autentic/i], ['/report', /712|score/i], ['/alerts', /alerta/i]]) {
@@ -67,12 +70,13 @@ console.log('V-020 atributos de array-credit-score:', JSON.stringify(attrs))
 // V-018: largura do input de atributo
 const box = await page.locator('.attr-row input').first().boundingBox()
 const val = await page.locator('.attr-row input').first().inputValue()
-console.log('V-018 input attr:', box?.width, 'px para valor de', val.length, 'chars')
+const ov = await page.locator('.attr-row input').first().evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, title: el.title }))
+console.log('V-018 input attr:', box?.width, 'px para valor de', val.length, 'chars |', JSON.stringify(ov), ov.sw > ov.cw ? 'ESTOURA' : 'cabe')
 
 // V-009: overflow mobile nas 7 telas
 const m = await ctx.newPage()
 await m.setViewportSize({ width: 390, height: 844 })
-for (const p of ['/', '/enrollment', '/kba', '/report', '/alerts', '/playground', '/inspector']) {
+for (const p of ['/', '/enrollment', '/kba', '/report', '/alerts', '/integracao', '/playground', '/inspector']) {
   await m.goto(BASE + p, { waitUntil: 'networkidle' }); await m.waitForTimeout(700)
   const o = await m.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }))
   console.log(`V-009 ${p}: scrollWidth=${o.sw} clientWidth=${o.cw} ${o.sw > o.cw ? 'OVERFLOW' : 'ok'}`)

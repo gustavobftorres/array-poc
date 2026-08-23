@@ -110,6 +110,29 @@ async function main() {
   }
   if (/erro|error|500/i.test(insp)) note('P0', 'Inspector: tela mostra erro -> ' + insp.slice(0, 300).replace(/\n/g, ' '))
 
+  // 6b. Guia de Integração (tela nova do ciclo 5)
+  await go('/integracao', 'Guia de Integração', '16-integracao')
+  {
+    const t = await page.locator('body').innerText()
+    for (const must of ['/user/v2', '/authenticate/v2', '/authenticate/v2/usertoken', 'appKey', 'userToken', 'SERVIDOR', 'BROWSER']) {
+      if (!t.includes(must)) note('P1', `Integração: a tela não menciona ${must}`)
+    }
+    const steps = await page.locator('.step').count()
+    if (steps !== 4) note('P1', `Integração: esperava 4 passos, achei ${steps}`)
+    const svg = await page.locator('.flow-diagram svg').count()
+    if (!svg) note('P1', 'Integração: diagrama do fluxo ausente')
+    const done = await page.locator('.step-state.ok').count()
+    console.log(`Integração: passos com dado real da sessão = ${done}/4`)
+    // alternar curl/TypeScript no passo 1
+    const tsBtn = page.getByRole('button', { name: 'TypeScript' }).first()
+    if (await tsBtn.count()) {
+      await tsBtn.click(); await page.waitForTimeout(300)
+      const code = await page.locator('.step .snippet pre').first().innerText()
+      if (!/ARRAY_CLIENT_TOKEN|client token/.test(code)) note('P1', 'Integração: exemplo TypeScript não mostra o client token no servidor')
+    } else note('P1', 'Integração: sem alternância curl/TypeScript')
+    await shot('16b-integracao-typescript')
+  }
+
   // 7. Playground
   consoleErrors.length = 0; netFails.length = 0
   await page.goto(BASE + '/playground', { waitUntil: 'networkidle' })
@@ -153,7 +176,7 @@ async function main() {
   // mobile 390x844
   const m = await ctx.newPage()
   await m.setViewportSize({ width: 390, height: 844 })
-  for (const [path, name] of [['/', 'm-dashboard'], ['/report', 'm-report'], ['/playground', 'm-playground'], ['/inspector', 'm-inspector']]) {
+  for (const [path, name] of [['/', 'm-dashboard'], ['/report', 'm-report'], ['/playground', 'm-playground'], ['/inspector', 'm-inspector'], ['/integracao', 'm-integracao']]) {
     await m.goto(BASE + path, { waitUntil: 'networkidle' })
     await m.waitForTimeout(900)
     const ov = await m.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }))

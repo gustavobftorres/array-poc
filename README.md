@@ -36,7 +36,22 @@ checagem de versão). Não são falhas: se `curl localhost:8787/api/health` resp
 está tudo certo.
 
 Abra <http://localhost:5173>. Comece pelo Dashboard → **Semear usuário demo**, ou percorra
-Enrollment → KBA → Credit Report → Alerts → Web Components → API Inspector.
+Enrollment → KBA → Credit Report → Alerts → **Guia de Integração** → Web Components → API Inspector.
+
+### Guia de Integração (`/integracao`) — comece por aqui se o objetivo é integrar
+
+A tela **Guia de Integração** é a única que *prescreve* a integração em vez de mostrá-la depois do
+fato. Ela traz, num stepper com diagrama:
+
+- o encadeamento das 4 chamadas: `POST /user/v2` → `GET`+`POST /authenticate/v2` →
+  `POST /authenticate/v2/usertoken` → atributo `userToken` no web component;
+- a **fronteira servidor/browser** desenhada: o *client token* nunca cruza; o `appKey` (público) e o
+  `userToken` (curta duração) são os únicos valores que vão ao browser;
+- por passo: o que **o seu backend** precisa implementar, o `curl` e o equivalente em **TypeScript**
+  (servidor ou browser, conforme o passo);
+- o **estado real da sessão atual** ao lado de cada passo (feito/pendente, com o valor obtido);
+- uma tabela dos erros que você vai encontrar (`userToken` expirado, appKey ≠ 36 chars, custom
+  element auto-fechado, KBA reprovada) e onde cada um se resolve.
 
 Com um `clientKey` na sessão (seed ou enrollment), as telas de **KBA, Credit Report e Alerts
 carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usando o
@@ -45,7 +60,7 @@ carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usand
 Comandos úteis:
 
 ```bash
-npm --workspace worker run test        # vitest (42 testes)
+npm --workspace worker run test        # vitest (58 testes)
 npm --workspace web run build          # tsc -b + vite build
 npm --workspace worker run typecheck   # tsc --noEmit
 npm --workspace worker run dev         # só o worker
@@ -108,13 +123,30 @@ Aliases com os nomes reais também funcionam e têm prioridade menor:
 | `GET /api/array/monitoring` | `GET /monitoring/v2` — **path inferido** |
 | `GET /api/inspector`, `DELETE /api/inspector` | log de auditoria em D1 |
 
+O relatório mock fecha a própria aritmética: `summary` traz o par `revolvingBalance` /
+`revolvingLimit` (só `Credit Card`, `Charge Card` e `Revolving` — empréstimo estudantil, hipoteca e
+financiamento de veículo são parcelados e entram em `installmentBalance`), e `utilization` é
+exatamente `revolvingBalance / revolvingLimit`. O histórico de score converge para o score canônico
+em vez de cair e recuperar 30 pontos no último mês, e os fatores `PAYMENT_HISTORY` / `DEROGATORY`
+são derivados também das marcas de atraso — "nenhum registro negativo" só aparece quando não há nem
+cobrança nem atraso.
+
 O log de auditoria cobre só chamadas que representam a Array: `/api/health`, `/api/status`,
 `/api/array/users`, `/api/array/reports` e `/api/array/usertoken/latest` são locais e **não**
 entram no Inspector.
 
-`POST /api/array/usertoken` usa o KV `CACHE`: o token emitido fica cacheado por `ttlInMinutes`
-(menos 60 s de margem) sob o `clientKey`, e a resposta vem com `"cached": true`. Use
-`?refresh=true` para forçar a emissão de um novo.
+`POST /api/array/usertoken` usa o KV `CACHE`. A chave é **namespaciada pelo escopo do token** —
+`usertoken:v2:<modo>|<appKey>|<baseUrl>|<ttlInMinutes>|<clientKey>` — porque um token emitido pelo
+mock **nunca** pode ser servido enquanto o worker roda contra a Array de verdade (e vice-versa):
+era exatamente o passo que você valida ao plugar as credenciais. O valor guardado carrega o escopo e
+é reconferido na leitura, então uma entrada de um build antigo também é descartada. Além disso:
+
+- o `ttlInMinutes` pedido faz parte da chave: pedir 1440 nunca devolve o token de 60 min de antes;
+- um token com menos de 60 s de vida útil restante não é servido do cache, e um `ttl` de 1 minuto
+  não é cacheado (a margem de segurança comeria a validade inteira);
+- `?refresh=true|1|yes|on` força emissão nova; em modo mock cada emissão devolve um token
+  **diferente** (o token deixou de ser determinístico por `clientKey`), então "Renovar userToken" no
+  Playground muda o valor de verdade.
 
 Tudo marcado como inferido tem um comentário `// UNVERIFIED path` em
 `worker/src/array/client.ts` — a documentação da Array é fechada por senha.
@@ -122,7 +154,10 @@ Tudo marcado como inferido tem um comentário `// UNVERIFIED path` em
 ## Validações do enrollment
 
 `dob` é validada de verdade (não só o formato): data existente no calendário, no passado, e
-idade entre 18 e 120 anos. `2024-13-45`, `2023-02-30` e `2099-01-01` voltam 400 com `error[]`.
+idade entre 18 e 120 anos **contada por calendário** (ano/mês/dia), não dividindo milissegundos por
+uma média de 365,25 dias — senão quem faz 18 anos hoje é aceito ou rejeitado conforme a hora do dia.
+As mesmas fronteiras valem no cliente (`calendarAge` em `web/src/pages/Enrollment.tsx`) e no worker
+(`calendarAge` em `worker/src/index.ts`). `2024-13-45`, `2023-02-30` e `2099-01-01` voltam 400 com `error[]`.
 As mesmas regras rodam no cliente (`web/src/pages/Enrollment.tsx`) e no worker (`dobSchema`).
 
 ## O mock tem registro (caminhos de erro)
@@ -159,3 +194,5 @@ egresso**. Consequências:
   componente nem endpoint em nenhuma fonte acessível). Alertas/monitoring/scoretracker têm
   slug verificado mas **path REST inferido**.
 - Toda a validação funcional foi feita em modo MOCK.
+- A tabela de usuários do Dashboard mostra os 10 mais recentes com um botão **Ver todos** — depois de
+  algumas rodadas de teste o D1 acumula dezenas de seeds.

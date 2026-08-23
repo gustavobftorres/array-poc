@@ -78,6 +78,16 @@ const CREDITORS = [
 
 const BUREAUS = ['TransUnion', 'Experian', 'Equifax'] as const
 
+/**
+ * Only these account types carry a revolving credit limit, so only they may
+ * enter the "limite total (rotativo)" and the utilization ratio. A student
+ * loan is amortized debt with a disbursed amount, not a revolving line (W-005).
+ */
+export const REVOLVING_TYPES = ['Credit Card', 'Charge Card', 'Revolving'] as const
+export function isRevolvingType(accountType: string): boolean {
+  return (REVOLVING_TYPES as readonly string[]).includes(accountType)
+}
+
 /** How long ago the (optional) collection account was reported. */
 const COLLECTION_MONTHS_AGO = 19
 
@@ -85,18 +95,21 @@ const COLLECTION_MONTHS_AGO = 19
 // Fixture builders
 // ---------------------------------------------------------------------------
 
+/**
+ * 12 monthly points that END at the canonical score. The drift is damped by
+ * how far back the month is, so the series converges instead of being yanked
+ * to `MOCK_BASE_SCORE` in the last month — which produced the implausible
+ * "712 -> 681 -> 712" shape with nothing in the report to explain it (W-011).
+ */
 export function mockScoreHistory(clientKey: string): ScoreHistoryPoint[] {
   const out: ScoreHistoryPoint[] = []
   for (let i = 11; i >= 0; i--) {
-    const drift = Math.round((rand(clientKey, `hist${i}`) - 0.45) * 24)
-    const trend = Math.round((11 - i) * 1.8)
-    out.push({
-      month: monthsBack(i),
-      score: Math.max(300, Math.min(850, MOCK_BASE_SCORE - trend - 10 + drift)),
-    })
+    const damp = i / 11 // 1 at the oldest month, 0 at the current one
+    const trend = i * 1.6 // older months sit below today's score
+    const drift = (rand(clientKey, `hist${i}`) - 0.5) * 9 * damp
+    const score = Math.round(MOCK_BASE_SCORE - trend + drift)
+    out.push({ month: monthsBack(i), score: Math.max(300, Math.min(850, score)) })
   }
-  // Anchor the latest month at the canonical demo score.
-  out[out.length - 1] = { month: monthsBack(0), score: MOCK_BASE_SCORE }
   return out
 }
 
@@ -108,6 +121,12 @@ export interface ReportStats {
   oldestAccountYears: number
   collectionsMonthsAgo: number
   onTimePct: number
+  /** Tradelines carrying at least one 30/60 mark. */
+  delinquentAccounts: number
+  /** Total 30/60 marks across every payment history. */
+  lateMarks: number
+  /** Worst mark seen ('60' | '30' | none). */
+  worstLateMark: '30' | '60' | null
 }
 
 /**
@@ -119,11 +138,20 @@ export function mockFactors(stats: ReportStats): ScoreFactor[] {
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
   const all: ScoreFactor[] = [
     {
+      // Direction/text come from the delinquency marks too: saying "positivo"
+      // next to a tile reading "Contas com atraso 2" was a contradiction on
+      // the same screen (W-012).
       code: 'PAYMENT_HISTORY',
       label: 'Histórico de pagamentos',
       impact: 'high',
-      direction: 'positive',
-      description: `${stats.onTimePct}% dos pagamentos em dia nos últimos 24 meses.`,
+      direction: stats.lateMarks > 0 ? 'negative' : 'positive',
+      description:
+        stats.lateMarks > 0
+          ? `${stats.onTimePct}% dos pagamentos em dia nos últimos 24 meses, mas ` +
+            `${plural(stats.lateMarks, 'marca de atraso', 'marcas de atraso')} em ` +
+            `${plural(stats.delinquentAccounts, 'conta', 'contas')}` +
+            `${stats.worstLateMark === '60' ? ' (pior marca: 60 dias)' : ''}.`
+          : `${stats.onTimePct}% dos pagamentos em dia nos últimos 24 meses, sem nenhuma marca de atraso.`,
     },
     {
       code: 'UTILIZATION',
@@ -150,14 +178,22 @@ export function mockFactors(stats: ReportStats): ScoreFactor[] {
       description: `${plural(stats.hardInquiries6mo, 'consulta hard', 'consultas hard')} nos últimos 6 meses.`,
     },
     {
+      // "Nenhum registro negativo" may only be said when there is neither a
+      // collection NOR a delinquent tradeline (W-012).
       code: 'DEROGATORY',
       label: 'Registros negativos',
-      impact: stats.collections > 0 ? 'medium' : 'low',
-      direction: stats.collections > 0 ? 'negative' : 'positive',
-      description:
+      impact: stats.collections > 0 ? 'medium' : stats.delinquentAccounts > 0 ? 'medium' : 'low',
+      direction: stats.collections > 0 || stats.delinquentAccounts > 0 ? 'negative' : 'positive',
+      description: [
         stats.collections > 0
           ? `${plural(stats.collections, 'conta em cobrança', 'contas em cobrança')} reportada há ${stats.collectionsMonthsAgo} meses.`
-          : 'Nenhum registro negativo ou conta em cobrança.',
+          : '',
+        stats.delinquentAccounts > 0
+          ? `${plural(stats.delinquentAccounts, 'conta com atraso', 'contas com atraso')} no histórico de 24 meses.`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ') || 'Nenhum registro negativo: nenhuma cobrança e nenhuma marca de atraso.',
     },
     {
       code: 'MIX',
@@ -184,7 +220,7 @@ export function mockTradelines(clientKey: string): Tradeline[] {
   const out: Tradeline[] = []
   for (let i = 0; i < count; i++) {
     const creditor = CREDITORS[(hash(`${clientKey}:tl${i}`) + i) % CREDITORS.length]
-    const isRevolving = creditor.type !== 'Auto Loan' && creditor.type !== 'Mortgage' && creditor.type !== 'Student Loan'
+    const isRevolving = isRevolvingType(creditor.type)
     const limit = isRevolving ? int(clientKey, `lim${i}`, 1500, 25000) : int(clientKey, `lim${i}`, 12000, 320000)
     const balance = Math.round(limit * (isRevolving ? rand(clientKey, `bal${i}`) * 0.7 : 0.3 + rand(clientKey, `bal${i}`) * 0.5))
     out.push({
@@ -205,10 +241,16 @@ export function mockTradelines(clientKey: string): Tradeline[] {
 
 export function mockReport(clientKey: string, productCode: string, reportKey: string, consumer?: { firstName: string; lastName: string; ssnLast4: string }): CreditReport {
   const tradelines = mockTradelines(clientKey)
-  const revolving = tradelines.filter((t) => t.creditLimit > 0 && t.accountType !== 'Mortgage' && t.accountType !== 'Auto Loan')
+  // Every revolving aggregate comes from exactly this set, so the tiles and the
+  // utilization ratio can always be reconstructed from the numbers on screen
+  // (W-004/W-005).
+  const revolving = tradelines.filter((t) => isRevolvingType(t.accountType) && t.creditLimit > 0)
+  const installment = tradelines.filter((t) => !isRevolvingType(t.accountType) || t.creditLimit <= 0)
   const totalBalance = tradelines.reduce((s, t) => s + t.balance, 0)
-  const totalLimit = revolving.reduce((s, t) => s + t.creditLimit, 0) || 1
+  const revLimit = revolving.reduce((s, t) => s + t.creditLimit, 0)
   const revBalance = revolving.reduce((s, t) => s + t.balance, 0)
+  const installmentBalance = installment.reduce((s, t) => s + t.balance, 0)
+  const totalLimit = revLimit || 1
   const history = mockScoreHistory(clientKey)
 
   const inquiries = Array.from({ length: int(clientKey, 'inqc', 2, 4) }, (_, i) => ({
@@ -231,7 +273,7 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
       ]
     : []
 
-  const utilization = Math.round((revBalance / totalLimit) * 1000) / 10
+  const utilization = revLimit > 0 ? Math.round((revBalance / revLimit) * 1000) / 10 : 0
   const hardInquiries6mo = inquiries.filter((i) => i.type === 'Hard').length
   const oldestAccountYears = Math.max(
     1,
@@ -241,6 +283,9 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
   const onTimePct = onTimeSlots.length
     ? Math.round((onTimeSlots.filter((p) => p === 'OK').length / onTimeSlots.length) * 100)
     : 100
+  const lateMarks = onTimeSlots.filter((p) => p !== 'OK').length
+  const delinquentAccounts = tradelines.filter((t) => t.paymentHistory.some((p) => p !== 'OK')).length
+  const worstLateMark = onTimeSlots.includes('60') ? '60' : onTimeSlots.includes('30') ? '30' : null
   const stats: ReportStats = {
     utilization,
     hardInquiries6mo,
@@ -248,6 +293,9 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
     oldestAccountYears,
     collectionsMonthsAgo: COLLECTION_MONTHS_AGO,
     onTimePct,
+    delinquentAccounts,
+    lateMarks,
+    worstLateMark,
   }
 
   return {
@@ -274,9 +322,14 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
       totalAccounts: tradelines.length,
       openAccounts: tradelines.filter((t) => t.status.startsWith('Open')).length,
       totalBalance,
-      totalCreditLimit: totalLimit,
+      // The utilization pair, side by side, so `revolvingBalance /
+      // revolvingLimit` reproduces `utilization` exactly (W-004).
+      revolvingBalance: revBalance,
+      revolvingLimit: revLimit,
       utilization,
-      delinquencies: tradelines.filter((t) => t.paymentHistory.some((p) => p !== 'OK')).length,
+      installmentBalance,
+      revolvingAccounts: revolving.length,
+      delinquencies: delinquentAccounts,
       inquiries6mo: hardInquiries6mo,
       oldestAccountYears,
     },
@@ -414,6 +467,8 @@ export function mockEnrollments(clientKey: string): MonitoringEnrollment[] {
 
 /** Token -> clientKey, so mock GET /user/v2 can resolve a session. */
 const tokenIndex = new Map<string, string>()
+/** How many userTokens we already minted per consumer (W-009). */
+const issueCount = new Map<string, number>()
 const consumerIndex = new Map<string, { firstName: string; lastName: string; ssnLast4: string }>()
 /** authTokens handed out by getKbaQuestions, per clientKey. */
 const authTokenIndex = new Map<string, string>()
@@ -520,7 +575,11 @@ export class MockArrayProvider implements ArrayProvider {
 
   async createUserToken({ clientKey, ttlInMinutes }: { clientKey: string; ttlInMinutes: number }): Promise<UserTokenResult> {
     requireConsumer(clientKey)
-    const userToken = mockUuid(`token:${clientKey}:${ttlInMinutes}`)
+    // One new token per issuance: a deterministic-by-clientKey token made
+    // "Renovar userToken" (and `?refresh=true`) look like a no-op (W-009).
+    const seq = (issueCount.get(clientKey) ?? 0) + 1
+    issueCount.set(clientKey, seq)
+    const userToken = mockUuid(`token:${clientKey}:${ttlInMinutes}:${seq}`)
     tokenIndex.set(userToken, clientKey)
     return {
       appKey: MOCK_APP_KEY,
@@ -539,13 +598,22 @@ export class MockArrayProvider implements ArrayProvider {
     return { reportKey, displayToken, productCode, clientKey }
   }
 
-  async getReport({ reportKey, displayToken }: { reportKey: string; displayToken: string; clientKey?: string }) {
+  async getReport({ reportKey, displayToken, clientKey }: { reportKey: string; displayToken: string; clientKey?: string }) {
+    // Same registry rule as alerts/monitoring/usertoken: an unknown clientKey
+    // is a 400 here too, instead of silently handing out the report (W-010).
+    if (clientKey) requireConsumer(clientKey)
     const known = reportIndex.get(reportKey)
     if (!known) throw new ArrayApiError('Report not found', 404, { message: 'Not Found' })
     if (known.displayToken !== displayToken) {
       throw new ArrayApiError('Bad Request', 400, {
         message: 'Bad Request',
         error: [{ value: '', message: 'displayToken does not match this reportKey', param: 'displayToken', location: 'query' }],
+      })
+    }
+    if (clientKey && known.clientKey !== clientKey) {
+      throw new ArrayApiError('Bad Request', 400, {
+        message: 'Bad Request',
+        error: [{ value: '', message: 'this reportKey does not belong to the given clientKey', param: 'clientKey', location: 'query' }],
       })
     }
     return mockReport(known.clientKey, known.productCode, reportKey, consumerIndex.get(known.clientKey))

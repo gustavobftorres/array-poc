@@ -41,6 +41,13 @@ t '^40[0-9]$' 'alert detail id inexistente' "$BASE/api/array/alerts/9999"
 t '^40[0-9]$' 'alert detail path traversal' "$BASE/api/array/alerts/..%2F..%2Fetc%2Fpasswd"
 t '^40[0-9]$' 'monitoring sem clientKey' "$BASE/api/array/monitoring"
 t '^40[0-9]$' 'scoretracker sem clientKey' "$BASE/api/array/scoretracker"
+# --- ciclo 5: W-010 (registro do mock no GET /report) e W-007/W-009 (cache do userToken)
+SEED=$(curl -s -X POST "$BASE/api/seed")
+read -r CK RK DT <<<"$(printf '%s' "$SEED" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("clientKey",""), d.get("reportKey",""), d.get("displayToken",""))')"
+t '^200$' 'W-010 report GET com clientKey valido' "$BASE/api/array/report?reportKey=$RK&displayToken=$DT&clientKey=$CK"
+t '^400$' 'W-010 report GET com clientKey inexistente' "$BASE/api/array/report?reportKey=$RK&displayToken=$DT&clientKey=NAO-EXISTE"
+t '^200$' 'W-007 usertoken ttl 1440 (nao reaproveita o de 60)' -X POST -H "$J" -d "{\"clientKey\":\"$CK\",\"ttlInMinutes\":1440}" "$BASE/api/array/usertoken"
+t '^200$' 'W-009 usertoken ?refresh=1' -X POST -H "$J" -d "{\"clientKey\":\"$CK\"}" "$BASE/api/array/usertoken?refresh=1"
 t '^404$' 'rota inexistente' "$BASE/api/array/nope"
 t '^40[0-9]$' 'metodo errado (DELETE user)' -X DELETE "$BASE/api/array/user"
 t '^200$' 'inspector limit negativo' "$BASE/api/inspector?limit=-5"
