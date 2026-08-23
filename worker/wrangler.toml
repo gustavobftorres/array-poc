@@ -1,0 +1,16 @@
+name = "array-poc-worker"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "array_poc"
+database_id = "local-array-poc"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "local-cache"
+
+[vars]
+ARRAY_ENV = "sandbox"

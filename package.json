@@ -1,0 +1,16 @@
+{
+  "name": "array-poc",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": ["worker", "web"],
+  "scripts": {
+    "dev": "concurrently -n worker,web -c blue,green \"npm --workspace worker run dev\" \"npm --workspace web run dev\"",
+    "db:migrate": "npm --workspace worker run db:migrate",
+    "build": "npm --workspace web run build",
+    "test": "npm --workspace worker run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
