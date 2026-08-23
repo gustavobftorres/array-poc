@@ -55,7 +55,9 @@ export class ArrayClient implements ArrayProvider {
   constructor(private readonly opts: ClientOptions) {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.attempts = opts.attempts ?? DEFAULT_ATTEMPTS
-    this.fetchImpl = opts.fetchImpl ?? fetch
+    // Must be bound: calling an unbound `fetch` as a method throws
+    // "Illegal invocation" inside workerd.
+    this.fetchImpl = (opts.fetchImpl ?? fetch).bind(globalThis)
   }
 
   // -- transport ------------------------------------------------------------
