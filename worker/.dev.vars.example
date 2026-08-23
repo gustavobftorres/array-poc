@@ -1,0 +1,15 @@
+# Copie para worker/.dev.vars (o wrangler dev carrega esse arquivo automaticamente).
+# Deixe VAZIO para rodar em modo mock (fixtures, sem rede).
+#
+# Mapeamento (veja docs/ARRAY_API_RESEARCH.md §2):
+#   SMARTY_AUTH_ID    -> Array appKey            (UUID de 36 chars, público por design)
+#   SMARTY_AUTH_TOKEN -> Array client token      (x-credmo-client-token, SEGREDO)
+SMARTY_AUTH_ID=
+SMARTY_AUTH_TOKEN=
+
+# Aliases aceitos com os nomes reais da Array (use estes OU os SMARTY_*).
+# ARRAY_APP_KEY=
+# ARRAY_CLIENT_TOKEN=
+
+# sandbox | production
+ARRAY_ENV=sandbox
