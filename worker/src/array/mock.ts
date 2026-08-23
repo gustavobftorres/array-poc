@@ -21,7 +21,12 @@ import type {
 import { ArrayApiError } from './types'
 import { ssnLast4 } from '../redact'
 
-export const MOCK_APP_KEY = 'MOCK-APP-KEY-0000-0000-000000000000'
+/**
+ * Placeholder appKey for mock mode. Array's embed loader validates
+ * `appKey.length === 36`, so this has to be exactly UUID-shaped (8-4-4-4-12)
+ * or every snippet copied out of the Playground would fail silently.
+ */
+export const MOCK_APP_KEY = 'MOCK0000-0000-4000-8000-MOCKAPPKEY00'
 export const MOCK_BASE_SCORE = 712
 
 /** Stable 32-bit hash — deterministic across runs (no Math.random anywhere). */
@@ -73,6 +78,9 @@ const CREDITORS = [
 
 const BUREAUS = ['TransUnion', 'Experian', 'Equifax'] as const
 
+/** How long ago the (optional) collection account was reported. */
+const COLLECTION_MONTHS_AGO = 19
+
 // ---------------------------------------------------------------------------
 // Fixture builders
 // ---------------------------------------------------------------------------
@@ -92,42 +100,64 @@ export function mockScoreHistory(clientKey: string): ScoreHistoryPoint[] {
   return out
 }
 
-export function mockFactors(clientKey: string): ScoreFactor[] {
+/** Aggregates the report and its narrative must agree on. */
+export interface ReportStats {
+  utilization: number
+  hardInquiries6mo: number
+  collections: number
+  oldestAccountYears: number
+  collectionsMonthsAgo: number
+  onTimePct: number
+}
+
+/**
+ * Score factors are written FROM the aggregates, never by hand — otherwise the
+ * narrative ("utilização de 41%") contradicts the tiles ("UTILIZATION 75.1")
+ * on the very same screen.
+ */
+export function mockFactors(stats: ReportStats): ScoreFactor[] {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
   const all: ScoreFactor[] = [
     {
       code: 'PAYMENT_HISTORY',
       label: 'Histórico de pagamentos',
       impact: 'high',
       direction: 'positive',
-      description: '98% dos pagamentos em dia nos últimos 24 meses.',
+      description: `${stats.onTimePct}% dos pagamentos em dia nos últimos 24 meses.`,
     },
     {
       code: 'UTILIZATION',
       label: 'Utilização de crédito rotativo',
       impact: 'high',
-      direction: 'negative',
-      description: 'Utilização de 41% — acima dos 30% recomendados.',
+      direction: stats.utilization > 30 ? 'negative' : 'positive',
+      description:
+        stats.utilization > 30
+          ? `Utilização de ${stats.utilization}% — acima dos 30% recomendados.`
+          : `Utilização de ${stats.utilization}% — dentro dos 30% recomendados.`,
     },
     {
       code: 'CREDIT_AGE',
       label: 'Idade média das contas',
       impact: 'medium',
       direction: 'positive',
-      description: 'Conta mais antiga com 11 anos.',
+      description: `Conta mais antiga com ${stats.oldestAccountYears} anos.`,
     },
     {
       code: 'INQUIRIES',
       label: 'Consultas recentes',
       impact: 'low',
       direction: 'negative',
-      description: `${int(clientKey, 'inq', 1, 4)} consultas hard nos últimos 6 meses.`,
+      description: `${plural(stats.hardInquiries6mo, 'consulta hard', 'consultas hard')} nos últimos 6 meses.`,
     },
     {
       code: 'DEROGATORY',
       label: 'Registros negativos',
-      impact: 'medium',
-      direction: 'negative',
-      description: '1 conta em cobrança reportada há 19 meses.',
+      impact: stats.collections > 0 ? 'medium' : 'low',
+      direction: stats.collections > 0 ? 'negative' : 'positive',
+      description:
+        stats.collections > 0
+          ? `${plural(stats.collections, 'conta em cobrança', 'contas em cobrança')} reportada há ${stats.collectionsMonthsAgo} meses.`
+          : 'Nenhum registro negativo ou conta em cobrança.',
     },
     {
       code: 'MIX',
@@ -196,10 +226,29 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
           originalCreditor: 'VERIZON WIRELESS',
           amount: int(clientKey, 'colamt', 220, 1450),
           status: 'Unpaid',
-          reported: `${monthsBack(19)}-05`,
+          reported: `${monthsBack(COLLECTION_MONTHS_AGO)}-05`,
         },
       ]
     : []
+
+  const utilization = Math.round((revBalance / totalLimit) * 1000) / 10
+  const hardInquiries6mo = inquiries.filter((i) => i.type === 'Hard').length
+  const oldestAccountYears = Math.max(
+    1,
+    new Date().getUTCFullYear() - Math.min(...tradelines.map((t) => Number(t.opened.slice(0, 4)))),
+  )
+  const onTimeSlots = tradelines.flatMap((t) => t.paymentHistory)
+  const onTimePct = onTimeSlots.length
+    ? Math.round((onTimeSlots.filter((p) => p === 'OK').length / onTimeSlots.length) * 100)
+    : 100
+  const stats: ReportStats = {
+    utilization,
+    hardInquiries6mo,
+    collections: collections.length,
+    oldestAccountYears,
+    collectionsMonthsAgo: COLLECTION_MONTHS_AGO,
+    onTimePct,
+  }
 
   return {
     reportKey,
@@ -220,16 +269,16 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
       { bureau: 'Equifax', model: 'VantageScore 3.0', score: MOCK_BASE_SCORE + int(clientKey, 'efxd', -18, 9), range: [300, 850] },
     ],
     scoreHistory: history,
-    factors: mockFactors(clientKey),
+    factors: mockFactors(stats),
     summary: {
       totalAccounts: tradelines.length,
       openAccounts: tradelines.filter((t) => t.status.startsWith('Open')).length,
       totalBalance,
       totalCreditLimit: totalLimit,
-      utilization: Math.round((revBalance / totalLimit) * 1000) / 10,
+      utilization,
       delinquencies: tradelines.filter((t) => t.paymentHistory.some((p) => p !== 'OK')).length,
-      inquiries6mo: inquiries.filter((i) => i.type === 'Hard').length,
-      oldestAccountYears: 11,
+      inquiries6mo: hardInquiries6mo,
+      oldestAccountYears,
     },
     tradelines,
     inquiries,
@@ -366,9 +415,60 @@ export function mockEnrollments(clientKey: string): MonitoringEnrollment[] {
 /** Token -> clientKey, so mock GET /user/v2 can resolve a session. */
 const tokenIndex = new Map<string, string>()
 const consumerIndex = new Map<string, { firstName: string; lastName: string; ssnLast4: string }>()
+/** authTokens handed out by getKbaQuestions, per clientKey. */
+const authTokenIndex = new Map<string, string>()
+/** reportKey -> { clientKey, displayToken, productCode } for ordered reports. */
+const reportIndex = new Map<string, { clientKey: string; displayToken: string; productCode: string }>()
+
+/**
+ * The mock refuses identifiers it never issued (V-014). Without this the POC
+ * only ever showed happy paths, while the real sandbox answers 400/404 to
+ * unknown keys — which is what the integration has to handle.
+ */
+function requireConsumer(clientKey: string): void {
+  if (consumerIndex.has(clientKey)) return
+  throw new ArrayApiError('Bad Request', 400, {
+    message: 'Bad Request',
+    error: [
+      {
+        value: '',
+        message: 'unknown clientKey — create the consumer first (mock keeps a registry, like the sandbox)',
+        param: 'clientKey',
+        location: 'body',
+      },
+    ],
+  })
+}
 
 export class MockArrayProvider implements ArrayProvider {
   readonly mode = 'mock' as const
+
+  /**
+   * Re-register consumers/reports that D1 already knows about. The registry
+   * lives in module memory, so a worker restart would otherwise invalidate a
+   * clientKey the browser still has in localStorage.
+   */
+  hydrate(
+    consumers: { clientKey: string; firstName: string; lastName: string; ssnLast4: string }[],
+    reports: { reportKey: string; clientKey: string; displayToken: string; productCode: string }[],
+  ): void {
+    for (const c of consumers) {
+      if (!c.clientKey || consumerIndex.has(c.clientKey)) continue
+      consumerIndex.set(c.clientKey, {
+        firstName: c.firstName,
+        lastName: c.lastName,
+        ssnLast4: c.ssnLast4,
+      })
+    }
+    for (const r of reports) {
+      if (!r.reportKey || reportIndex.has(r.reportKey)) continue
+      reportIndex.set(r.reportKey, {
+        clientKey: r.clientKey,
+        displayToken: r.displayToken,
+        productCode: r.productCode || 'credmo3bReportScore',
+      })
+    }
+  }
 
   async createUser(input: CreateUserInput): Promise<CreateUserResult> {
     const seed = `${input.firstName}|${input.lastName}|${input.dob}|${ssnLast4(input.ssn)}`
@@ -390,10 +490,20 @@ export class MockArrayProvider implements ArrayProvider {
   }
 
   async getKbaQuestions({ clientKey }: { clientKey: string }) {
-    return mockKbaQuestions(clientKey)
+    requireConsumer(clientKey)
+    const res = mockKbaQuestions(clientKey)
+    authTokenIndex.set(clientKey, res.authToken)
+    return res
   }
 
   async answerKba({ clientKey, authToken, answers }: { clientKey: string; authToken: string; answers: Record<string, string> }): Promise<AnswerKbaResult> {
+    requireConsumer(clientKey)
+    if (authTokenIndex.get(clientKey) !== authToken) {
+      throw new ArrayApiError('Bad Request', 400, {
+        message: 'Bad Request',
+        error: [{ value: '', message: 'unknown or expired authToken', param: 'authToken', location: 'body' }],
+      })
+    }
     const wrong = Object.entries(MOCK_CORRECT_ANSWERS).filter(
       ([qid, correct]) => answers[qid] !== undefined && answers[qid] !== correct,
     )
@@ -409,6 +519,7 @@ export class MockArrayProvider implements ArrayProvider {
   }
 
   async createUserToken({ clientKey, ttlInMinutes }: { clientKey: string; ttlInMinutes: number }): Promise<UserTokenResult> {
+    requireConsumer(clientKey)
     const userToken = mockUuid(`token:${clientKey}:${ttlInMinutes}`)
     tokenIndex.set(userToken, clientKey)
     return {
@@ -421,24 +532,37 @@ export class MockArrayProvider implements ArrayProvider {
   }
 
   async orderReport({ clientKey, productCode }: { clientKey: string; productCode: string }): Promise<OrderReportResult> {
-    return {
-      reportKey: mockUuid(`report:${clientKey}:${productCode}`),
-      displayToken: mockUuid(`display:${clientKey}:${productCode}`),
-      productCode,
-      clientKey,
-    }
+    requireConsumer(clientKey)
+    const reportKey = mockUuid(`report:${clientKey}:${productCode}`)
+    const displayToken = mockUuid(`display:${clientKey}:${productCode}`)
+    reportIndex.set(reportKey, { clientKey, displayToken, productCode })
+    return { reportKey, displayToken, productCode, clientKey }
   }
 
-  async getReport({ reportKey, clientKey }: { reportKey: string; displayToken: string; clientKey?: string }) {
-    const key = clientKey ?? reportKey
-    return mockReport(key, 'credmo3bReportScore', reportKey, consumerIndex.get(key))
+  async getReport({ reportKey, displayToken }: { reportKey: string; displayToken: string; clientKey?: string }) {
+    const known = reportIndex.get(reportKey)
+    if (!known) throw new ArrayApiError('Report not found', 404, { message: 'Not Found' })
+    if (known.displayToken !== displayToken) {
+      throw new ArrayApiError('Bad Request', 400, {
+        message: 'Bad Request',
+        error: [{ value: '', message: 'displayToken does not match this reportKey', param: 'displayToken', location: 'query' }],
+      })
+    }
+    return mockReport(known.clientKey, known.productCode, reportKey, consumerIndex.get(known.clientKey))
   }
 
   async refreshDisplayToken({ clientKey, reportKey }: { clientKey: string; reportKey: string }) {
-    return { reportKey, displayToken: mockUuid(`display2:${clientKey}:${reportKey}:${Date.now() % 1000}`) }
+    const known = reportIndex.get(reportKey)
+    if (!known || known.clientKey !== clientKey) {
+      throw new ArrayApiError('Report not found', 404, { message: 'Not Found' })
+    }
+    const displayToken = mockUuid(`display2:${clientKey}:${reportKey}:${Date.now() % 1000}`)
+    reportIndex.set(reportKey, { ...known, displayToken })
+    return { reportKey, displayToken }
   }
 
   async getAlerts({ clientKey, bureau }: { clientKey: string; bureau?: string }) {
+    requireConsumer(clientKey)
     const alerts = mockAlerts(clientKey)
     return { alerts: bureau ? alerts.filter((a) => a.bureau.toLowerCase() === bureau.toLowerCase()) : alerts }
   }
@@ -451,10 +575,12 @@ export class MockArrayProvider implements ArrayProvider {
   }
 
   async getMonitoringEnrollments({ clientKey }: { clientKey: string }) {
+    requireConsumer(clientKey)
     return { enrollments: mockEnrollments(clientKey) }
   }
 
   async getScoreTracker({ clientKey }: { clientKey: string }) {
+    requireConsumer(clientKey)
     return { clientKey, history: mockScoreHistory(clientKey) }
   }
 }

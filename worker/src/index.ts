@@ -20,6 +20,32 @@ app.use('*', cors())
 
 const mockProvider = new MockArrayProvider()
 
+/**
+ * The mock keeps its registry in memory; D1 outlives it. Rehydrate once per
+ * isolate so a `clientKey`/`reportKey` saved in the browser keeps working after
+ * a worker restart.
+ */
+let mockHydrated = false
+async function hydrateMock(env: Env | undefined): Promise<void> {
+  if (mockHydrated || !env?.DB || getConfig(env).mode !== 'mock') return
+  mockHydrated = true
+  const [users, reports] = await Promise.all([db.listUsers(env.DB, 200), db.allReportKeys(env.DB)])
+  mockProvider.hydrate(
+    users.map((u) => ({
+      clientKey: String(u.client_key ?? ''),
+      firstName: String(u.first_name ?? ''),
+      lastName: String(u.last_name ?? ''),
+      ssnLast4: String(u.ssn_last4 ?? ''),
+    })),
+    reports.map((r) => ({
+      reportKey: String(r.report_key ?? ''),
+      clientKey: String(r.client_key ?? ''),
+      displayToken: String(r.display_token ?? ''),
+      productCode: String(r.product_code ?? ''),
+    })),
+  )
+}
+
 function provider(env: Env | undefined): ArrayProvider {
   const cfg = getConfig(env)
   if (cfg.mode === 'mock') return mockProvider
@@ -30,10 +56,17 @@ function provider(env: Env | undefined): ArrayProvider {
 // Audit middleware — records every API call into D1 (redacted)
 // ---------------------------------------------------------------------------
 
-const AUDIT_SKIP = /^\/api\/(inspector|health|status)$/
+/**
+ * Routes that do not represent a call to Array: meta endpoints and the local D1
+ * listings the frontend polls. Auditing them buried the real Array calls under
+ * frontend noise (V-008).
+ */
+const AUDIT_SKIP =
+  /^\/api\/(inspector|health|status|array\/users|array\/reports|array\/usertoken\/latest)$/
 
 app.use('/api/*', async (c, next) => {
   const started = Date.now()
+  await hydrateMock(c.env)
   let requestBody: unknown = undefined
   if (c.req.method !== 'GET' && c.req.method !== 'DELETE') {
     const raw = await c.req.text()
@@ -88,16 +121,36 @@ function body(c: { get: (k: 'requestBody') => unknown }): unknown {
 // ---------------------------------------------------------------------------
 
 const addressSchema = z.object({
-  street: z.string().min(3),
-  city: z.string().min(2),
+  street: z.string().min(3).max(120),
+  city: z.string().min(2).max(80),
   state: z.string().length(2),
   zip: z.string().regex(/^\d{5}(-\d{4})?$/, 'zip must be 5 or 9 digits'),
 })
 
+/**
+ * A real calendar date in the past, with a plausible adult age.
+ * The format regex alone used to accept `2024-13-45` and `2099-01-01`.
+ */
+export const dobSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'dob must be YYYY-MM-DD')
+  .refine((v) => {
+    const [y, m, d] = v.split('-').map(Number)
+    if (m < 1 || m > 12 || d < 1 || d > 31) return false
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    // Round-trip catches impossible days (2023-02-30) and month overflow.
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+  }, 'dob must be a real calendar date')
+  .refine((v) => new Date(`${v}T00:00:00Z`).getTime() <= Date.now(), 'dob cannot be in the future')
+  .refine((v) => {
+    const age = (Date.now() - new Date(`${v}T00:00:00Z`).getTime()) / 31_557_600_000
+    return age >= 18 && age <= 120
+  }, 'consumer must be between 18 and 120 years old')
+
 const createUserSchema = z.object({
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
-  dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'dob must be YYYY-MM-DD'),
+  firstName: z.string().min(1).max(80),
+  lastName: z.string().min(1).max(80),
+  dob: dobSchema,
   ssn: z.string().transform((s) => s.replace(/\D/g, '')).refine((s) => s.length === 9, 'ssn must have 9 digits'),
   address: addressSchema,
 })
@@ -156,8 +209,12 @@ function errorResponse(e: unknown) {
         : e.kind === 'timeout'
           ? 'A Array não respondeu no tempo limite. Tente novamente.'
           : undefined
+    // A blocked egress or a timeout is an upstream condition, not a client
+    // error — reporting 403/408 would paint infrastructure as "the caller's fault".
+    const status =
+      e.kind === 'blocked' ? 502 : e.kind === 'timeout' ? 504 : e.status >= 400 && e.status < 600 ? e.status : 502
     return {
-      status: e.status >= 400 && e.status < 600 ? e.status : 502,
+      status,
       payload: { message: e.message, kind: e.kind, hint, upstream: redact(e.body) },
     }
   }
@@ -246,11 +303,54 @@ app.post('/api/array/authenticate', async (c) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// KV cache for user tokens
+//
+// A userToken is valid for `ttlInMinutes`; minting a new one on every component
+// mount burns an Array call for nothing. We cache the minted token in KV under
+// the clientKey with the same TTL (minus a safety margin) so repeated requests
+// inside the window are served locally. Cache misses always fall through.
+// ---------------------------------------------------------------------------
+
+const TOKEN_CACHE_PREFIX = 'usertoken:'
+/** Stop serving a cached token this many seconds before it actually expires. */
+const TOKEN_CACHE_MARGIN_S = 60
+
+type CachedToken = { userToken: string; clientKey: string; ttlInMinutes: number; expiresAt?: string }
+
+async function cachedUserToken(env: Env | undefined, clientKey: string): Promise<CachedToken | null> {
+  if (!env?.CACHE?.get) return null
+  try {
+    return await env.CACHE.get<CachedToken>(`${TOKEN_CACHE_PREFIX}${clientKey}`, 'json')
+  } catch {
+    return null
+  }
+}
+
+async function cacheUserToken(env: Env | undefined, value: CachedToken): Promise<void> {
+  if (!env?.CACHE?.put) return
+  const ttl = Math.max(60, value.ttlInMinutes * 60 - TOKEN_CACHE_MARGIN_S)
+  try {
+    await env.CACHE.put(`${TOKEN_CACHE_PREFIX}${value.clientKey}`, JSON.stringify(value), { expirationTtl: ttl })
+  } catch {
+    /* KV unavailable (unit tests / local) — caching is best-effort */
+  }
+}
+
 app.post('/api/array/usertoken', async (c) => {
   const v = parse(userTokenSchema, body(c), 'body')
   if (!v.ok) return c.json(v.response, 400)
   try {
+    const hit = c.req.query('refresh') === 'true' ? null : await cachedUserToken(c.env, v.data.clientKey)
+    if (hit?.userToken) return c.json({ ...hit, cached: true })
+
     const res = await provider(c.env).createUserToken(v.data)
+    await cacheUserToken(c.env, {
+      userToken: res.userToken,
+      clientKey: res.clientKey,
+      ttlInMinutes: res.ttlInMinutes,
+      expiresAt: res.expiresAt,
+    })
     if (c.env?.DB) {
       await db.insertUserToken(c.env.DB, {
         clientKey: res.clientKey,
@@ -425,6 +525,20 @@ app.post('/api/seed', async (c) => {
   }
 })
 
+/**
+ * Parse a stored `api_calls` column. A row written by an older/broken build
+ * must never take down the whole Inspector: fall back to the raw text tagged
+ * as unparseable instead of throwing.
+ */
+function safeJson(raw: string | null | undefined): unknown {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return { _unparseable: true, raw: raw.slice(0, 4000) }
+  }
+}
+
 app.get('/api/inspector', async (c) => {
   const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 50) || 50, 1), 200)
   const offset = Math.max(Number(c.req.query('offset') ?? 0) || 0, 0)
@@ -433,8 +547,8 @@ app.get('/api/inspector', async (c) => {
   return c.json({
     calls: rows.map((r) => ({
       ...r,
-      request: r.request ? JSON.parse(r.request) : null,
-      response: r.response ? JSON.parse(r.response) : null,
+      request: safeJson(r.request),
+      response: safeJson(r.response),
     })),
     total,
     limit,

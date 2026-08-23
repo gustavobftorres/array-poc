@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { HttpError, type ApiError } from '../lib/api'
 
 export function Card({ title, actions, children, className }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
@@ -127,11 +127,26 @@ export function Field({
   hint?: string
   type?: string
 }) {
+  // Generated id keeps label/input associated for pointer, keyboard and AT.
+  const id = useId()
+  const describedBy = error ? `${id}-err` : hint ? `${id}-hint` : undefined
   return (
     <div>
-      <label>{label}</label>
-      <input type={type} value={value} placeholder={placeholder} aria-invalid={error ? 'true' : undefined} onChange={(e) => onChange(e.target.value)} />
-      {error ? <div className="field-error">{error}</div> : hint ? <div className="hint">{hint}</div> : null}
+      <label htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        aria-invalid={error ? 'true' : undefined}
+        aria-describedby={describedBy}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {error ? (
+        <div className="field-error" id={`${id}-err`}>{error}</div>
+      ) : hint ? (
+        <div className="hint" id={`${id}-hint`}>{hint}</div>
+      ) : null}
     </div>
   )
 }

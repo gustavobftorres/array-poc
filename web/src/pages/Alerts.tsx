@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Alert, type Enrollment } from '../lib/api'
 import { useSession } from '../lib/session'
 import { Card, Empty, ErrorBox, Json, useAsync } from '../components/ui'
@@ -20,10 +20,22 @@ export function Alerts() {
   const alerts = useAsync<{ alerts: Alert[] }>()
   const monitoring = useAsync<{ enrollments: Enrollment[] }>()
 
-  const load = async () => {
-    await alerts.run(() => api.alerts(clientKey.trim(), bureau || undefined))
-    await monitoring.run(() => api.monitoring(clientKey.trim()))
-  }
+  const load = useCallback(async () => {
+    const key = clientKey.trim()
+    if (!key) return
+    await alerts.run(() => api.alerts(key, bureau || undefined))
+    await monitoring.run(() => api.monitoring(key))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientKey, bureau])
+
+  // With a clientKey already in the session, load on mount instead of showing
+  // an empty screen that looks like "there is nothing here" (V-007).
+  const autoLoaded = useRef(false)
+  useEffect(() => {
+    if (autoLoaded.current || !session.clientKey) return
+    autoLoaded.current = true
+    void load()
+  }, [session.clientKey, load])
 
   return (
     <div className="stack">
@@ -57,6 +69,12 @@ export function Alerts() {
           </button>
         </div>
         <ErrorBox error={alerts.error} />
+        {!clientKey.trim() && (
+          <p className="hint" style={{ marginTop: 10 }}>
+            Sem <code>clientKey</code> na sessão: rode o Enrollment ou “Semear usuário demo” no Dashboard. Com a sessão
+            preenchida esta tela busca os alertas sozinha ao abrir.
+          </p>
+        )}
       </Card>
 
       {alerts.data && (

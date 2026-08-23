@@ -30,13 +30,22 @@ npm run db:migrate
 npm run dev
 ```
 
+No primeiro boot o `wrangler dev` imprime avisos esperados **antes** do `Ready on :8787`
+(`wrangler out-of-date` e, sem rede liberada, um `Error: Request was cancelled.` do undici na
+checagem de versão). Não são falhas: se `curl localhost:8787/api/health` responde `{"ok":true}`,
+está tudo certo.
+
 Abra <http://localhost:5173>. Comece pelo Dashboard → **Semear usuário demo**, ou percorra
 Enrollment → KBA → Credit Report → Alerts → Web Components → API Inspector.
+
+Com um `clientKey` na sessão (seed ou enrollment), as telas de **KBA, Credit Report e Alerts
+carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usando o
+`reportKey`+`displayToken` guardados no `localStorage`.
 
 Comandos úteis:
 
 ```bash
-npm --workspace worker run test        # vitest (28 testes)
+npm --workspace worker run test        # vitest (42 testes)
 npm --workspace web run build          # tsc -b + vite build
 npm --workspace worker run typecheck   # tsc --noEmit
 npm --workspace worker run dev         # só o worker
@@ -99,8 +108,30 @@ Aliases com os nomes reais também funcionam e têm prioridade menor:
 | `GET /api/array/monitoring` | `GET /monitoring/v2` — **path inferido** |
 | `GET /api/inspector`, `DELETE /api/inspector` | log de auditoria em D1 |
 
+O log de auditoria cobre só chamadas que representam a Array: `/api/health`, `/api/status`,
+`/api/array/users`, `/api/array/reports` e `/api/array/usertoken/latest` são locais e **não**
+entram no Inspector.
+
+`POST /api/array/usertoken` usa o KV `CACHE`: o token emitido fica cacheado por `ttlInMinutes`
+(menos 60 s de margem) sob o `clientKey`, e a resposta vem com `"cached": true`. Use
+`?refresh=true` para forçar a emissão de um novo.
+
 Tudo marcado como inferido tem um comentário `// UNVERIFIED path` em
 `worker/src/array/client.ts` — a documentação da Array é fechada por senha.
+
+## Validações do enrollment
+
+`dob` é validada de verdade (não só o formato): data existente no calendário, no passado, e
+idade entre 18 e 120 anos. `2024-13-45`, `2023-02-30` e `2099-01-01` voltam 400 com `error[]`.
+As mesmas regras rodam no cliente (`web/src/pages/Enrollment.tsx`) e no worker (`dobSchema`).
+
+## O mock tem registro (caminhos de erro)
+
+O provider mock só reconhece o que ele mesmo emitiu: `clientKey` desconhecido → 400,
+`reportKey` desconhecido → 404, `displayToken` que não casa com o `reportKey` → 400,
+`authToken` não emitido → 400. Assim a POC também demonstra os erros que o sandbox devolve.
+O registro vive em memória, mas é reidratado do D1 a cada boot do worker — um `clientKey`
+guardado no navegador continua valendo depois de reiniciar.
 
 ## Segurança da POC
 
@@ -114,8 +145,17 @@ Tudo marcado como inferido tem um comentário `// UNVERIFIED path` em
 `array.io`, `sandbox.array.io` e `embed[.sandbox].array.io` são **bloqueados pelo proxy de
 egresso**. Consequências:
 
-- Em modo SANDBOX as chamadas voltam com erro tratado (`kind: "blocked"`) e uma dica no
-  frontend — nunca uma tela branca.
+- Em modo SANDBOX as chamadas voltam com erro tratado (`kind: "blocked"`, HTTP **502** — é
+  condição de upstream, não erro do cliente; timeout vira 504) e uma dica no frontend — nunca
+  uma tela branca.
 - No Playground, os Web Components mostram um placeholder explicando o que apareceria, além
-  do snippet HTML pronto para copiar para uma rede liberada.
+  do snippet HTML pronto para copiar para uma rede liberada. O snippet é colável num HTML em
+  branco: runtime `array-web-component.js` primeiro, bundle do componente com `?appKey=`
+  depois, elemento **com tag de fechamento** (custom element não é void) e o listener de
+  `array-event`. Em modo mock o `appKey` é um placeholder de 36 caracteres
+  (`MOCK0000-…`) — o loader da Array valida `appKey.length === 36`; troque pelo seu.
+- O Playground marca por componente o quanto a informação é confiável: tag verificada,
+  `// UNVERIFIED` (Ads, cujo nome de tag é inferido) ou não documentado (disputas, que não têm
+  componente nem endpoint em nenhuma fonte acessível). Alertas/monitoring/scoretracker têm
+  slug verificado mas **path REST inferido**.
 - Toda a validação funcional foi feita em modo MOCK.

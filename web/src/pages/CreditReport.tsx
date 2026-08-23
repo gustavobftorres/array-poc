@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type CreditReport } from '../lib/api'
 import { useSession } from '../lib/session'
 import { Card, Empty, ErrorBox, Json, TokenChip, useAsync } from '../components/ui'
@@ -9,6 +9,24 @@ const PRODUCTS = [
 ]
 
 const money = (n: number) => `US$ ${n.toLocaleString('en-US')}`
+
+/** Human labels + per-field formatting for the `summary` block (V-011). */
+const SUMMARY_META: Record<string, { label: string; format: (v: unknown) => string }> = {
+  totalAccounts: { label: 'Contas (total)', format: String },
+  openAccounts: { label: 'Contas abertas', format: String },
+  totalBalance: { label: 'Saldo total', format: (v) => money(Number(v)) },
+  totalCreditLimit: { label: 'Limite total (rotativo)', format: (v) => money(Number(v)) },
+  utilization: { label: 'Utilização do rotativo', format: (v) => `${v}%` },
+  delinquencies: { label: 'Contas com atraso', format: String },
+  inquiries6mo: { label: 'Consultas hard (6 meses)', format: String },
+  oldestAccountYears: { label: 'Conta mais antiga', format: (v) => `${v} anos` },
+}
+
+function summaryTile(key: string, value: unknown): { label: string; value: string } {
+  const meta = SUMMARY_META[key]
+  if (meta) return { label: meta.label, value: meta.format(value) }
+  return { label: key, value: typeof value === 'number' ? value.toLocaleString('en-US') : String(value) }
+}
 
 function ScoreGauge({ score, model }: { score: number; model: string }) {
   const pct = Math.max(0, Math.min(1, (score - 300) / 550))
@@ -75,6 +93,28 @@ export function CreditReportPage() {
     await report.run(() => api.getReport({ reportKey: o.reportKey, displayToken: o.displayToken, clientKey: clientKey.trim() }))
   }
 
+  // A reload keeps clientKey/reportKey/displayToken in localStorage, so the
+  // report itself must come back too instead of an empty screen (V-019/V-007).
+  const restored = useRef(false)
+  useEffect(() => {
+    if (restored.current) return
+    if (!session.reportKey || !session.displayToken) return
+    restored.current = true
+    order.setData({
+      reportKey: session.reportKey,
+      displayToken: session.displayToken,
+      productCode,
+    })
+    void report.run(() =>
+      api.getReport({
+        reportKey: session.reportKey,
+        displayToken: session.displayToken,
+        clientKey: session.clientKey || undefined,
+      }),
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.reportKey, session.displayToken])
+
   const refresh = async () => {
     if (!order.data) return
     const res = await api.refreshDisplayToken({ clientKey: clientKey.trim(), reportKey: order.data.reportKey })
@@ -90,7 +130,14 @@ export function CreditReportPage() {
           <h1>Credit Report</h1>
           <p>
             <code>POST /report/v2</code> devolve <code>reportKey</code> + <code>displayToken</code>;{' '}
-            <code>GET /report/v2</code> busca o conteúdo. Base: <code>{status?.baseUrl}</code>
+            <code>GET /report/v2</code> busca o conteúdo.{' '}
+            {status?.mode === 'mock' ? (
+              <>
+                Modo <strong>mock</strong>: nenhuma chamada externa (a base seria <code>{status?.baseUrl}</code>).
+              </>
+            ) : (
+              <>Base: <code>{status?.baseUrl}</code></>
+            )}
           </p>
         </div>
       </div>
@@ -146,12 +193,15 @@ export function CreditReportPage() {
           </div>
 
           <div className="grid cols-4">
-            {Object.entries(r.summary ?? {}).map(([k, v]) => (
-              <div className="card stat" key={k}>
-                <div className="label">{k}</div>
-                <div className="value">{typeof v === 'number' && k.toLowerCase().includes('balance') ? money(v) : String(v)}</div>
-              </div>
-            ))}
+            {Object.entries(r.summary ?? {}).map(([k, v]) => {
+              const tile = summaryTile(k, v)
+              return (
+                <div className="card stat" key={k}>
+                  <div className="label">{tile.label}</div>
+                  <div className="value">{tile.value}</div>
+                </div>
+              )
+            })}
           </div>
 
           <Card title="Fatores do score">

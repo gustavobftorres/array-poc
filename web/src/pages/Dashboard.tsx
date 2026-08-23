@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useSession } from '../lib/session'
@@ -9,10 +9,15 @@ export function Dashboard() {
   const [users, setUsers] = useState<Record<string, unknown>[]>([])
   const seed = useAsync<Record<string, unknown>>()
 
-  const loadUsers = () => api.users().then((r) => setUsers(r.users)).catch(() => setUsers([]))
+  const loadUsers = useCallback(
+    () => api.users().then((r) => setUsers(r.users)).catch(() => setUsers([])),
+    [],
+  )
+  // One fetch per mount. Depending on `status` used to fire this 3x per visit
+  // (null -> object -> reload) and flooded the Inspector with internal calls.
   useEffect(() => {
-    loadUsers()
-  }, [status])
+    void loadUsers()
+  }, [loadUsers])
 
   const runSeed = async () => {
     const res = await seed.run(() => api.seed())

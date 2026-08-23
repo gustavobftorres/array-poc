@@ -23,7 +23,26 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Concurrent identical GETs are collapsed into one network call. React's
+ * StrictMode double-mounts every effect in dev, which otherwise doubled every
+ * read and polluted the audit log.
+ */
+const inFlight = new Map<string, Promise<unknown>>()
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  if (method === 'GET') {
+    const pending = inFlight.get(path) as Promise<T> | undefined
+    if (pending) return pending
+    const p = doRequest<T>(path, init).finally(() => inFlight.delete(path))
+    inFlight.set(path, p)
+    return p
+  }
+  return doRequest<T>(path, init)
+}
+
+async function doRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
     headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },

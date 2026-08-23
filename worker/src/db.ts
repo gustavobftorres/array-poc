@@ -110,6 +110,17 @@ export async function listReports(db: D1Database, clientKey?: string, limit = 25
   return (res?.results ?? []) as unknown as Record<string, unknown>[]
 }
 
+/** Every stored report with its capability tokens — used to rehydrate the mock. */
+export async function allReportKeys(db: D1Database, limit = 200) {
+  const res = await safe('allReportKeys', () =>
+    db
+      .prepare(`SELECT client_key, report_key, display_token, product_code FROM reports ORDER BY created_at DESC LIMIT ?`)
+      .bind(limit)
+      .all(),
+  )
+  return (res?.results ?? []) as unknown as Record<string, unknown>[]
+}
+
 export async function upsertAlerts(db: D1Database, alerts: Alert[]) {
   for (const a of alerts) {
     await safe('upsertAlert', () =>

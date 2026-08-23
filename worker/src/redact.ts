@@ -62,7 +62,14 @@ export function redact(value: unknown, depth = 0): unknown {
   return value
 }
 
-/** JSON-stringify with redaction, bounded in size. */
+/**
+ * JSON-stringify with redaction, bounded in size.
+ *
+ * The result is **always valid JSON**: when the payload is over `maxLen` we do
+ * not cut the string in half (that used to write broken JSON into `api_calls`
+ * and made GET /api/inspector fail for every row). Instead we store an envelope
+ * describing the truncation plus a short, JSON-escaped preview.
+ */
 export function redactedJson(value: unknown, maxLen = 20000): string {
   let s: string
   try {
@@ -70,5 +77,12 @@ export function redactedJson(value: unknown, maxLen = 20000): string {
   } catch {
     s = '"[UNSERIALIZABLE]"'
   }
-  return s.length > maxLen ? `${s.slice(0, maxLen)}…"[TRUNCATED]"` : s
+  if (s.length <= maxLen) return s
+  const previewLen = Math.max(0, Math.min(2000, maxLen - 200))
+  return JSON.stringify({
+    _truncated: true,
+    bytes: s.length,
+    maxLen,
+    preview: `${s.slice(0, previewLen)}…`,
+  })
 }

@@ -52,7 +52,10 @@ export function Inspector() {
 
       <ErrorBox error={page.error} />
 
-      <Card title={`Chamadas (${data?.total ?? 0})`}>
+      <Card
+        title={`Chamadas (${data?.total ?? 0})`}
+        actions={<span className="small muted">clique numa linha para ver request/response redigidos</span>}
+      >
         {calls.length === 0 ? (
           <Empty>Nada registrado ainda. Navegue pelas outras telas e volte aqui.</Empty>
         ) : (
@@ -71,7 +74,11 @@ export function Inspector() {
               <tbody>
                 {calls.map((c) => (
                   <Fragment key={c.id}>
-                    <tr className="clickable" onClick={() => setOpen(open === c.id ? null : c.id)}>
+                    <tr
+                      className={`clickable ${open === c.id ? 'open' : ''}`}
+                      title="clique para ver o payload redigido"
+                      onClick={() => setOpen(open === c.id ? null : c.id)}
+                    >
                       <td className="muted">{c.ts.slice(11, 19)}</td>
                       <td><span className="badge neutral">{c.method}</span></td>
                       <td className="mono">{c.path}</td>

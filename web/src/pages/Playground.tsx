@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrayComponent, buildSnippet, useArrayEvents } from '../components/ArrayComponent'
+import { APP_KEY_PLACEHOLDER, ArrayComponent, buildSnippet, isValidAppKey, useArrayEvents } from '../components/ArrayComponent'
 import { Card, CopyButton, Empty, useAsync, ErrorBox } from '../components/ui'
 import { useSession } from '../lib/session'
 import { api } from '../lib/api'
@@ -9,12 +9,34 @@ import { api } from '../lib/api'
  * `attrs` lists the attributes that are meaningful for each tag; values are
  * editable live and feed both the rendered element and the copyable snippet.
  */
+/**
+ * How solid our knowledge of each item is — surfaced in the UI so nobody
+ * discovers the gap after buying the integration. See docs/ARRAY_API_RESEARCH.md.
+ */
+type Verification = 'verified' | 'unverified' | 'undocumented'
+
+const VERIFICATION_LABEL: Record<Verification, string> = {
+  verified: 'tag verificada',
+  unverified: '// UNVERIFIED',
+  undocumented: 'não documentado',
+}
+
+const VERIFICATION_CLASS: Record<Verification, string> = {
+  verified: 'ok',
+  unverified: 'warn',
+  undocumented: 'danger',
+}
+
 interface Spec {
   tag: string
   label: string
   describe: string
   expects: string[]
   attrs: Record<string, string>
+  /** Confidence on the tag name + attributes. */
+  verification: Verification
+  /** Why it is not fully verified / what the API side looks like. */
+  caveat?: string
 }
 
 const TOKEN = '__USER_TOKEN__'
@@ -27,6 +49,7 @@ const CATALOG: Spec[] = [
     describe: 'Formulário de cadastro do consumidor (nome, endereço, SSN, DOB) hospedado pela Array.',
     expects: ['Campos de identidade e endereço', 'Validação e submissão direto para a Array', 'Emite array-event com o clientKey resultante'],
     attrs: { clientKey: CLIENT, sandbox: 'true', exp: 'true', tui: 'false', efx: 'false' },
+    verification: 'verified',
   },
   {
     tag: 'array-account-login',
@@ -34,6 +57,7 @@ const CATALOG: Spec[] = [
     describe: 'Tela de login do consumidor no ecossistema Array.',
     expects: ['Campos de e-mail/senha', 'Emite array-event com o userToken após autenticar'],
     attrs: { sandbox: 'true' },
+    verification: 'verified',
   },
   {
     tag: 'array-account-settings',
@@ -41,6 +65,7 @@ const CATALOG: Spec[] = [
     describe: 'Preferências da conta do consumidor (contato, notificações).',
     expects: ['Dados de contato editáveis', 'Preferências de alerta'],
     attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'verified',
   },
   {
     tag: 'array-authentication-kba',
@@ -48,6 +73,7 @@ const CATALOG: Spec[] = [
     describe: 'Fluxo completo de perguntas de identidade (KBA) renderizado pela Array.',
     expects: ['Perguntas multiple-choice vindas do bureau', 'Telas próprias de sucesso/falha (showResultPages)', 'array-event carrega o userToken no metadata'],
     attrs: { userId: CLIENT, sandbox: 'true', showResultPages: 'true', tui: 'true', exp: 'true', efx: 'true' },
+    verification: 'verified',
   },
   {
     tag: 'array-credit-overview',
@@ -64,7 +90,9 @@ const CATALOG: Spec[] = [
       scoreFactorsLink: '#scoreFactors',
       scoreSimulatorLink: '#scoreSimulator',
       settingsLink: '#settings',
+      helloPrivacyLink: '#helloPrivacy',
     },
+    verification: 'verified',
   },
   {
     tag: 'array-credit-report',
@@ -72,13 +100,20 @@ const CATALOG: Spec[] = [
     describe: 'Relatório de crédito completo (modo automático ou manual).',
     expects: ['Tradelines, consultas, registros públicos', 'Modo manual usa productCode + reportKey + displayToken'],
     attrs: { userToken: TOKEN, sandbox: 'true', productCode: 'credmo3bReportScore', reportKey: '', displayToken: '' },
+    verification: 'verified',
   },
   {
     tag: 'array-credit-score',
     label: 'Credit Score',
     describe: 'Widget de score, com histórico.',
-    expects: ['Número do score e faixa', 'Gráfico de evolução'],
-    attrs: { userToken: TOKEN, sandbox: 'true' },
+    expects: [
+      'Número do score e faixa',
+      'Gráfico de evolução',
+      'Modo automático: só userToken — o componente pede o produto sozinho',
+      'Modo manual: productCode + reportKey + displayToken (você pede o relatório pela API)',
+    ],
+    attrs: { userToken: TOKEN, sandbox: 'true', productCode: 'exp1bScore', reportKey: '', displayToken: '' },
+    verification: 'verified',
   },
   {
     tag: 'array-credit-score-insights',
@@ -86,6 +121,7 @@ const CATALOG: Spec[] = [
     describe: 'Fatores que compõem o score: histórico de pagamento, utilização, dívida.',
     expects: ['Lista de fatores com impacto', 'Explicação por fator'],
     attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'verified',
   },
   {
     tag: 'array-credit-score-simulator',
@@ -93,6 +129,7 @@ const CATALOG: Spec[] = [
     describe: 'Simulador what-if de score. TransUnion e Experian apenas — Equifax não simula.',
     expects: ['Sliders de cenário (pagar dívida, abrir conta)', 'Score projetado', 'Webhook “Credit Score Simulated”'],
     attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'verified',
   },
   {
     tag: 'array-credit-alerts',
@@ -100,6 +137,10 @@ const CATALOG: Spec[] = [
     describe: 'Alertas de monitoramento de crédito por bureau.',
     expects: ['Lista de alertas com severidade', 'Detalhe por alerta'],
     attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'verified',
+    caveat:
+      'A tag é verificada, mas os endpoints REST equivalentes (/alert/v2, /monitoring/v2) são inferidos — ' +
+      'veja // UNVERIFIED path em worker/src/array/client.ts. Se você usar só o componente, isso não te afeta.',
   },
   {
     tag: 'array-credit-debt-analysis',
@@ -107,6 +148,29 @@ const CATALOG: Spec[] = [
     describe: 'Análise de dívidas e utilização por conta.',
     expects: ['Distribuição de dívida por tipo', 'Utilização de rotativo'],
     attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'verified',
+  },
+  {
+    tag: 'array-ads',
+    label: 'Ads (?)',
+    describe: 'Componente de ofertas/Ads. A Array documenta /docs/ads e /docs/ads-component, mas o nome da tag não aparece em nenhuma fonte acessível.',
+    expects: ['Provavelmente cartões de oferta pré-qualificada', 'Atributos desconhecidos'],
+    attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'unverified',
+    caveat:
+      'Nome da tag INFERIDO (docs/ARRAY_API_RESEARCH.md §4.2). Montar aqui provavelmente falha mesmo em rede liberada — ' +
+      'confirme o nome com o portal da Array antes de planejar a integração.',
+  },
+  {
+    tag: 'array-dispute',
+    label: 'Disputas (?)',
+    describe: 'Fluxo de disputa de informação no relatório. A Array entrega UX de disputa no My Credit Manager, mas nem componente nem endpoint aparecem em qualquer fonte acessível.',
+    expects: ['Nada verificado: sem tag, sem atributos, sem rota REST'],
+    attrs: { userToken: TOKEN, sandbox: 'true' },
+    verification: 'undocumented',
+    caveat:
+      'Lacuna real da POC (docs/ARRAY_API_RESEARCH.md §3.9): não existe API nem componente de disputas verificado. ' +
+      'Se disputa é requisito do seu produto, isso é a primeira pergunta para o contato comercial da Array.',
   },
 ]
 
@@ -130,7 +194,7 @@ export function Playground() {
         v === TOKEN ? session.userToken : v === CLIENT ? session.clientKey : v,
       ]),
     )
-    if (spec.tag === 'array-credit-report') {
+    if (spec.tag === 'array-credit-report' || spec.tag === 'array-credit-score') {
       resolved.reportKey = session.reportKey
       resolved.displayToken = session.displayToken
     }
@@ -157,7 +221,16 @@ export function Playground() {
           <p>
             Cada componente da Array é carregado do CDN <code>{status?.componentsCdn}</code> (runtime{' '}
             <code>array-web-component.js</code> + bundle por componente). Edite os atributos ao vivo, copie o snippet e
-            observe os eventos <code>array-event</code>.
+            observe os eventos <code>array-event</code>. O snippet sai pronto para colar num HTML em branco —
+            runtime primeiro, bundle com <code>?appKey=</code> depois, elemento com tag de fechamento e o listener de{' '}
+            <code>array-event</code>.
+          </p>
+          <p className="hint">
+            Os selos em cada aba dizem o quanto essa informação é confiável:{' '}
+            <span className="badge ok">tag verificada</span> vista em integração real,{' '}
+            <span className="badge warn">// UNVERIFIED</span> inferida da documentação indexada,{' '}
+            <span className="badge danger">não documentado</span> lacuna admitida (disputas). Alertas, monitoring e
+            scoretracker têm tag/slug verificados mas <strong>paths REST inferidos</strong>.
           </p>
         </div>
       </div>
@@ -166,6 +239,11 @@ export function Playground() {
         {CATALOG.map((c) => (
           <button key={c.tag} className={c.tag === tag ? 'active' : ''} onClick={() => setTag(c.tag)}>
             {c.label}
+            {c.verification !== 'verified' && (
+              <span className={`badge ${VERIFICATION_CLASS[c.verification]}`} style={{ marginLeft: 6 }}>
+                {c.verification === 'unverified' ? '?' : '!'}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -199,13 +277,33 @@ export function Playground() {
             <ErrorBox error={token.error} />
           </Card>
 
-          <Card title="Sobre este componente">
+          <Card
+            title="Sobre este componente"
+            actions={
+              <span className={`badge ${VERIFICATION_CLASS[spec.verification]}`}>
+                {VERIFICATION_LABEL[spec.verification]}
+              </span>
+            }
+          >
             <p className="small">{spec.describe}</p>
             <ul className="small muted" style={{ margin: '0 0 0 18px' }}>
               {spec.expects.map((e) => (
                 <li key={e}>{e}</li>
               ))}
             </ul>
+            {spec.caveat && (
+              <p className="hint" style={{ marginTop: 10 }}>
+                <strong>{VERIFICATION_LABEL[spec.verification]}:</strong> {spec.caveat}
+              </p>
+            )}
+            {(spec.tag === 'array-credit-report' || spec.tag === 'array-credit-score') && (
+              <p className="hint" style={{ marginTop: 10 }}>
+                <strong>Automático vs manual:</strong> deixe <code>reportKey</code> e <code>displayToken</code> vazios e
+                o componente pede o relatório sozinho a partir do <code>userToken</code> (modo automático). Preencha os
+                três (<code>productCode</code> + <code>reportKey</code> + <code>displayToken</code>, obtidos no{' '}
+                <code>POST /report/v2</code> da tela Credit Report) para o modo manual, em que o pedido é seu.
+              </p>
+            )}
           </Card>
         </div>
 
@@ -245,6 +343,20 @@ export function Playground() {
           </Card>
 
           <Card title="Snippet HTML" actions={<CopyButton text={snippet} label="Copiar snippet" />}>
+            <p className="hint" style={{ marginTop: 0 }}>
+              {isValidAppKey(appKey) ? (
+                <>
+                  <code>appKey</code> de {appKey.length} caracteres
+                  {status?.mode === 'mock' ? ' (placeholder do modo mock)' : ''} — o loader da Array exige exatamente 36.{' '}
+                  <strong>Troque pelo appKey da sua conta antes de usar.</strong>
+                </>
+              ) : (
+                <>
+                  Sem <code>appKey</code> válido: o snippet sai com <code>{APP_KEY_PLACEHOLDER}</code>. O loader da Array
+                  valida <code>appKey.length === 36</code>.
+                </>
+              )}
+            </p>
             <div className="snippet">
               <pre className="json">{snippet}</pre>
             </div>

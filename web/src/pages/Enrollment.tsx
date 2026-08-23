@@ -19,11 +19,25 @@ const DEMO = {
 const EMPTY = { firstName: '', lastName: '', dob: '', ssn: '', street: '', city: '', state: '', zip: '' }
 type Form = typeof EMPTY
 
+/** Mirrors `dobSchema` in the worker: real date, in the past, adult (V-002). */
+function dobError(dob: string): string | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) return 'Formato YYYY-MM-DD'
+  const [y, m, d] = dob.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return 'Data inexistente no calendário'
+  if (dt.getTime() > Date.now()) return 'Data no futuro'
+  const age = (Date.now() - dt.getTime()) / 31_557_600_000
+  if (age < 18) return 'O consumidor precisa ter 18 anos ou mais'
+  if (age > 120) return 'Idade implausível (>120 anos)'
+  return undefined
+}
+
 function validate(f: Form): Partial<Record<keyof Form, string>> {
   const e: Partial<Record<keyof Form, string>> = {}
   if (!f.firstName.trim()) e.firstName = 'Obrigatório'
   if (!f.lastName.trim()) e.lastName = 'Obrigatório'
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.dob)) e.dob = 'Formato YYYY-MM-DD'
+  e.dob = dobError(f.dob)
+  if (!e.dob) delete e.dob
   if (f.ssn.replace(/\D/g, '').length !== 9) e.ssn = '9 dígitos (use um SSN de teste 666…)'
   if (f.street.trim().length < 3) e.street = 'Rua obrigatória'
   if (f.city.trim().length < 2) e.city = 'Cidade obrigatória'
@@ -65,6 +79,7 @@ export function Enrollment() {
           <p>
             <code>POST /api/array/user</code> → <code>POST {status?.baseUrl ?? '{base}'}/user/v2</code>. Retorna o{' '}
             <code>clientKey</code>, identificador usado por todas as chamadas seguintes.
+            {status?.mode === 'mock' && ' Em modo mock nada sai pela rede — essa base é só a que seria usada.'}
           </p>
         </div>
         <button className="ghost" onClick={() => setForm(DEMO)}>Preencher identidade de teste</button>

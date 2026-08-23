@@ -30,4 +30,19 @@ describe('redaction', () => {
     const big = { blob: 'x'.repeat(50_000) }
     expect(redactedJson(big).length).toBeLessThan(21_000)
   })
+
+  it('keeps the truncated output valid JSON (regression: inspector 500)', () => {
+    const big = { firstName: 'A'.repeat(50_000), nested: { deep: 'B'.repeat(30_000) } }
+    const out = redactedJson(big)
+    const parsed = JSON.parse(out) as { _truncated: boolean; bytes: number; preview: string }
+    expect(parsed._truncated).toBe(true)
+    expect(parsed.bytes).toBeGreaterThan(20_000)
+    expect(parsed.preview.length).toBeLessThanOrEqual(2001)
+  })
+
+  it('stays valid JSON for payloads just over the limit', () => {
+    for (const n of [19_990, 20_000, 20_010, 25_000]) {
+      expect(() => JSON.parse(redactedJson({ blob: 'y'.repeat(n) }))).not.toThrow()
+    }
+  })
 })

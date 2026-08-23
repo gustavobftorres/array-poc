@@ -1,4 +1,5 @@
 import type { Env, Mode } from './types'
+import { MOCK_APP_KEY } from './array/mock'
 
 export const SANDBOX_BASE_URL = 'https://sandbox.array.io/api'
 export const PROD_BASE_URL = 'https://array.io/api'
@@ -55,6 +56,6 @@ export function publicStatus(cfg: AppConfig) {
     baseUrl: cfg.baseUrl,
     componentsCdn: cfg.componentsCdn,
     /** appKey is public by design in Array (it ships in page source). */
-    appKey: cfg.mode === 'mock' ? 'MOCK-APP-KEY-0000-0000-000000000000' : cfg.appKey,
+    appKey: cfg.mode === 'mock' ? MOCK_APP_KEY : cfg.appKey,
   }
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useSession } from '../lib/session'
@@ -36,6 +36,15 @@ export function Kba() {
     if (res?.userToken) patch({ userToken: res.userToken })
   }
 
+  // Auto-fetch the questions when the session already knows the consumer (V-007).
+  const autoLoaded = useRef(false)
+  useEffect(() => {
+    if (autoLoaded.current || !session.clientKey) return
+    autoLoaded.current = true
+    void fetchQuestions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.clientKey])
+
   const answered = questions.data ? Object.keys(answers).length : 0
   const total = questions.data?.questions.length ?? 0
 
@@ -65,7 +74,14 @@ export function Kba() {
             {token.loading ? 'Gerando…' : 'Gerar userToken direto (server-side)'}
           </button>
         </div>
-        <p className="hint">Base: <code>{status?.baseUrl}</code></p>
+        <p className="hint">
+          {status?.mode === 'mock' ? (
+            <>Modo <strong>mock</strong>: nenhuma chamada externa (a base seria <code>{status?.baseUrl}</code>).</>
+          ) : (
+            <>Base: <code>{status?.baseUrl}</code></>
+          )}
+          {!clientKey.trim() && ' Sem clientKey na sessão — rode o Enrollment ou o seed do Dashboard primeiro.'}
+        </p>
         <ErrorBox error={questions.error} />
         <ErrorBox error={token.error} />
       </Card>

@@ -50,3 +50,10 @@ describe('config / mode', () => {
     expect(status).toMatchObject({ mode: 'sandbox', hasAuthId: true, hasAuthToken: true })
   })
 })
+
+describe('mock appKey placeholder', () => {
+  it('is 36 chars so Array\'s embed loader accepts it', () => {
+    // The loader validates appKey.length === 36 (docs/ARRAY_API_RESEARCH.md §2).
+    expect(publicStatus(getConfig({})).appKey).toHaveLength(36)
+  })
+})

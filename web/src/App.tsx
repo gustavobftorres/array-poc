@@ -12,7 +12,8 @@ import { Inspector } from './pages/Inspector'
 export function App() {
   return (
     <SessionProvider>
-      <BrowserRouter>
+      {/* future flags silence the React Router v7 migration warnings */}
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
