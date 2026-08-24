@@ -11,7 +11,9 @@
     "dev": "concurrently -n worker,web -c blue,green \"npm --workspace worker run dev\" \"npm --workspace web run dev\"",
     "db:migrate": "npm --workspace worker run db:migrate",
     "build": "npm --workspace web run build",
-    "test": "npm --workspace worker run test"
+    "test": "npm --workspace worker run test",
+    "sync-env": "node scripts/sync-env.mjs",
+    "predev": "node scripts/sync-env.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

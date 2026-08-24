@@ -130,13 +130,20 @@ Qualquer achado agora é regressão.
 ## Onde colar as chaves
 
 ```bash
-cp worker/.dev.vars.example worker/.dev.vars   # este é o único arquivo lido em runtime
+cp .env.example .env    # preencha as duas chaves aqui
+npm run dev             # gera worker/.dev.vars a partir do .env e sobe a POC
 ```
 
-Não existe `.env` na raiz nesta POC: quem lê as credenciais é o `wrangler` a partir de
-`worker/.dev.vars` (ver `worker/src/config.ts`). Um `.env` na raiz seria ignorado.
+O `.env` **da raiz é a fonte única** das credenciais. Como o `wrangler` só lê variáveis de
+`worker/.dev.vars`, o `npm run dev` roda antes `scripts/sync-env.mjs` (hook `predev`), que **gera
+`worker/.dev.vars` a partir do `.env`** — antes o `cp .env.example .env` era um passo sem efeito
+(Z-004). Para gerar sem subir a POC: `npm run sync-env`. O script é conservador: sem `.env` não faz
+nada, e um `.env` sem credenciais **não** apaga um `worker/.dev.vars` já preenchido (que continua
+funcionando se você preferir editá-lo direto — `cp worker/.dev.vars.example worker/.dev.vars`).
+Nenhum dos dois arquivos vai para o git (`.gitignore`).
 
-Preencha `worker/.dev.vars` e **reinicie o worker**:
+Conteúdo do `.env` (e, gerado a partir dele, do `worker/.dev.vars`) — **reinicie o worker** depois
+de mudar:
 
 ```ini
 SMARTY_AUTH_ID=<appKey da Array>        # UUID de 36 chars

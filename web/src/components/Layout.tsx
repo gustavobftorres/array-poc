@@ -53,7 +53,8 @@ function ModeBanner() {
       {status.mode === 'mock' ? (
         <span>
           Rodando com fixtures locais. Para chamar o sandbox da Array, preencha <code>SMARTY_AUTH_ID</code> e{' '}
-          <code>SMARTY_AUTH_TOKEN</code> em <code>worker/.dev.vars</code> e reinicie o worker.
+          <code>SMARTY_AUTH_TOKEN</code> no <code>.env</code> da raiz (<code>cp .env.example .env</code>) e reinicie o
+          worker — o <code>npm run dev</code> gera o <code>worker/.dev.vars</code> a partir dele.
         </span>
       ) : (
         <span>

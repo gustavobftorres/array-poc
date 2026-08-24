@@ -59,7 +59,8 @@ npm --workspace worker run db:migrate
 npm run dev                      # worker :8787 + web :5173
 
 # Usar a API real da Array: preencha as duas chaves e reinicie
-cp worker/.dev.vars.example worker/.dev.vars   # SMARTY_AUTH_ID -> appKey, SMARTY_AUTH_TOKEN -> client token
+cp .env.example .env   # preencha SMARTY_AUTH_ID (appKey) e SMARTY_AUTH_TOKEN (client token)
+# o `npm run dev` roda scripts/sync-env.mjs e gera worker/.dev.vars a partir do .env
 
 # Suíte de QA (ver docs/QA.md)
 npm --workspace worker run test
