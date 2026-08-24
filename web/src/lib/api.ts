@@ -1,12 +1,78 @@
 export interface Status {
   mode: 'mock' | 'sandbox'
-  hasAuthId: boolean
-  hasAuthToken: boolean
+  /** ARRAY_APP_KEY presente. */
+  hasAppKey: boolean
+  /** ARRAY_SERVER_TOKEN (ou o alias ARRAY_CLIENT_TOKEN) presente. */
+  hasServerToken: boolean
   arrayEnv: 'sandbox' | 'production'
   baseUrl: string
+  /** De onde saiu a base: override explícito ou derivada do ARRAY_ENV. */
+  baseUrlSource: 'ARRAY_BASE_URL' | 'ARRAY_ENV'
   componentsCdn: string
+  /** Trava do ARRAY_AUTH_MODE: em `browser` o client token nunca é anexado. */
+  authMode: 'server' | 'browser'
+  productCode: string
+  poll: { intervalSeconds: number; timeoutSeconds: number; unit: string; unitInferred: boolean }
+  identity: {
+    slug: string | null
+    label: string
+    source: 'default' | 'persona' | 'json'
+    confidence: 'verified' | 'unverified'
+    note: string
+    sandboxOnly: boolean
+  }
+  webhook: {
+    listenerUrl: string | null
+    localPath: string | null
+    configured: boolean
+    secretInPathInferred: boolean
+    registrationIsManual: boolean
+  }
+  /** Nomes deprecados e valores inválidos encontrados no ambiente. */
+  warnings: string[]
   appKey: string
   users: number
+}
+
+export interface Persona {
+  slug: string
+  label: string
+  firstName: string
+  lastName: string
+  dob: string
+  ssn: string | null
+  ssnLast4: string
+  address: { street: string; city: string; state: string; zip: string }
+  confidence: 'verified' | 'unverified'
+  note: string
+}
+
+export interface PersonasPage {
+  personas: Persona[]
+  active: Persona & { source: string }
+  sandboxOnly: boolean
+  arrayEnv: string
+  warning: string
+}
+
+export interface WebhookEvent {
+  id: string
+  received_at: string
+  event_type: string
+  client_key: string | null
+  report_key: string | null
+  source: string
+  payload: unknown
+}
+
+export interface WebhookConfig {
+  listenerUrl: string | null
+  configured: boolean
+  localPath: string
+  registrationIsManual: boolean
+  registrationNote: string
+  secretInPathInferred: boolean
+  signatureFromArray: boolean
 }
 
 export interface ApiError {
@@ -115,8 +181,11 @@ export const api = {
   userToken: (body: { clientKey: string; ttlInMinutes: number }) =>
     request<{ userToken: string; ttlInMinutes: number; expiresAt: string; appKey: string }>('/array/usertoken', { method: 'POST', body: JSON.stringify(body) }),
 
-  orderReport: (body: { clientKey: string; productCode: string }) =>
-    request<{ reportKey: string; displayToken: string; productCode: string }>('/array/report', { method: 'POST', body: JSON.stringify(body) }),
+  orderReport: (body: { clientKey: string; productCode?: string; simulate?: string }) =>
+    request<{ reportKey: string; displayToken: string; productCode: string; simulate?: string }>('/array/report', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   getReport: (p: { reportKey: string; displayToken: string; clientKey?: string }) => request<CreditReport>(`/array/report${qs(p)}`),
   refreshDisplayToken: (body: { clientKey: string; reportKey: string }) =>
     request<{ reportKey: string; displayToken: string }>('/array/report', { method: 'PUT', body: JSON.stringify(body) }),
@@ -125,6 +194,17 @@ export const api = {
   alerts: (clientKey: string, bureau?: string) => request<{ alerts: Alert[] }>(`/array/alerts${qs({ clientKey, bureau })}`),
   monitoring: (clientKey: string) => request<{ enrollments: Enrollment[] }>(`/array/monitoring${qs({ clientKey })}`),
   scoreTracker: (clientKey: string) => request<{ history: { month: string; score: number }[] }>(`/array/scoretracker${qs({ clientKey })}`),
+
+  personas: () => request<PersonasPage>('/personas'),
+
+  webhookConfig: () => request<WebhookConfig>('/webhooks/config'),
+  webhookEvents: (limit = 50) => request<{ events: WebhookEvent[]; total: number }>(`/webhooks/events${qs({ limit })}`),
+  simulateWebhook: (body?: unknown) =>
+    request<{ received: boolean; simulated: boolean; eventType: string }>('/webhooks/simulate', {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
+  clearWebhookEvents: () => request<{ cleared: boolean }>('/webhooks/events', { method: 'DELETE' }),
 
   inspector: (limit = 50, offset = 0) => request<InspectorPage>(`/inspector${qs({ limit, offset })}`),
   clearInspector: () => request<{ cleared: boolean }>('/inspector', { method: 'DELETE' }),

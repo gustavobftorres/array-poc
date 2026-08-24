@@ -11,17 +11,32 @@ export interface FakeD1 {
 
 const API_CALL_COLS = ['id', 'ts', 'method', 'path', 'status', 'duration_ms', 'request', 'response', 'mode']
 
-export function fakeD1(): FakeD1 & { rows: Record<string, unknown>[]; apiCalls: Record<string, unknown>[] } {
+const WEBHOOK_COLS = ['id', 'received_at', 'event_type', 'client_key', 'report_key', 'source', 'payload', 'created_at']
+
+export function fakeD1(): FakeD1 & {
+  rows: Record<string, unknown>[]
+  apiCalls: Record<string, unknown>[]
+  webhookEvents: Record<string, unknown>[]
+} {
   const statements: { sql: string; params: unknown[] }[] = []
   const rows: Record<string, unknown>[] = []
   const apiCalls: Record<string, unknown>[] = []
+  const webhookEvents: Record<string, unknown>[] = []
 
   const isApiCalls = (sql: string) => /api_calls/i.test(sql)
+  const isWebhooks = (sql: string) => /webhook_events/i.test(sql)
 
   const stmt = (sql: string, params: unknown[] = []): any => ({
     bind: (...p: unknown[]) => stmt(sql, p),
     run: async () => {
       statements.push({ sql, params })
+      if (isWebhooks(sql)) {
+        if (/^\s*INSERT/i.test(sql)) {
+          webhookEvents.unshift(Object.fromEntries(WEBHOOK_COLS.map((c, i) => [c, params[i] ?? null])))
+        } else if (/^\s*DELETE/i.test(sql)) {
+          webhookEvents.length = 0
+        }
+      }
       if (isApiCalls(sql)) {
         if (/^\s*INSERT/i.test(sql)) {
           apiCalls.unshift(Object.fromEntries(API_CALL_COLS.map((c, i) => [c, params[i] ?? null])))
@@ -37,6 +52,10 @@ export function fakeD1(): FakeD1 & { rows: Record<string, unknown>[]; apiCalls: 
     },
     all: async () => {
       statements.push({ sql, params })
+      if (isWebhooks(sql)) {
+        const limit = /LIMIT/i.test(sql) ? Number(params[0]) : webhookEvents.length
+        return { results: webhookEvents.slice(0, limit), success: true }
+      }
       if (isApiCalls(sql)) {
         const [limit, offset] = /LIMIT/i.test(sql) ? [Number(params[0]), Number(params[1])] : [apiCalls.length, 0]
         return { results: apiCalls.slice(offset, offset + limit), success: true }
@@ -45,9 +64,12 @@ export function fakeD1(): FakeD1 & { rows: Record<string, unknown>[]; apiCalls: 
     },
     first: async () => {
       statements.push({ sql, params })
-      if (/COUNT/i.test(sql)) return { n: isApiCalls(sql) ? apiCalls.length : rows.length }
+      if (/COUNT/i.test(sql)) {
+        return { n: isWebhooks(sql) ? webhookEvents.length : isApiCalls(sql) ? apiCalls.length : rows.length }
+      }
+      if (isWebhooks(sql)) return webhookEvents[0] ?? null
       return isApiCalls(sql) ? (apiCalls[0] ?? null) : (rows[0] ?? null)
     },
   })
-  return { statements, rows, apiCalls, prepare: (sql: string) => stmt(sql) }
+  return { statements, rows, apiCalls, webhookEvents, prepare: (sql: string) => stmt(sql) }
 }

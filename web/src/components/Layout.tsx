@@ -9,6 +9,7 @@ const NAV = [
   { to: '/report', label: 'Credit Report', ico: '▤' },
   { to: '/alerts', label: 'Alerts / Monitoring', ico: '⚑' },
   { to: '/integracao', label: 'Guia de Integração', ico: '⇢' },
+  { to: '/webhooks', label: 'Webhooks', ico: '⇦' },
   { to: '/playground', label: 'Web Components', ico: '◈' },
   { to: '/inspector', label: 'API Inspector', ico: '⟲' },
 ]
@@ -52,13 +53,20 @@ function ModeBanner() {
       <strong>MODO {status.mode.toUpperCase()}</strong>
       {status.mode === 'mock' ? (
         <span>
-          Rodando com fixtures locais. Para chamar o sandbox da Array, preencha <code>SMARTY_AUTH_ID</code> e{' '}
-          <code>SMARTY_AUTH_TOKEN</code> no <code>.env</code> da raiz (<code>cp .env.example .env</code>) e reinicie o
+          Rodando com fixtures locais. Para chamar o sandbox da Array, preencha <code>ARRAY_APP_KEY</code> e{' '}
+          <code>ARRAY_SERVER_TOKEN</code> no <code>.env</code> da raiz (<code>cp .env.example .env</code>) e reinicie o
           worker — o <code>npm run dev</code> gera o <code>worker/.dev.vars</code> a partir dele.
         </span>
       ) : (
         <span>
-          Chamando a Array real em <code>{status.baseUrl}</code>.
+          Chamando a Array real em <code>{status.baseUrl}</code> ({status.baseUrlSource}) · modo de auth{' '}
+          <strong>{status.authMode}</strong>
+          {status.authMode === 'browser' && ' — o client token NÃO pode ser anexado neste modo'}.
+        </span>
+      )}
+      {status.warnings.length > 0 && (
+        <span className="badge warn" title={status.warnings.join(' · ')}>
+          {status.warnings.length} aviso(s) de config
         </span>
       )}
       <span className="spacer" />

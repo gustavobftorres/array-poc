@@ -1,40 +1,71 @@
 import { describe, expect, it } from 'vitest'
-import { getConfig, publicStatus, PROD_BASE_URL, SANDBOX_BASE_URL } from '../src/config'
+import {
+  DEFAULT_POLL_INTERVAL_S,
+  DEFAULT_POLL_TIMEOUT_S,
+  DEFAULT_PRODUCT_CODE,
+  getConfig,
+  normalizeBaseUrl,
+  publicStatus,
+  PROD_BASE_URL,
+  SANDBOX_BASE_URL,
+} from '../src/config'
 
 describe('config / mode', () => {
   it('falls back to mock with no credentials', () => {
     const cfg = getConfig({})
     expect(cfg.mode).toBe('mock')
-    expect(cfg.hasAuthId).toBe(false)
-    expect(cfg.hasAuthToken).toBe(false)
+    expect(cfg.hasAppKey).toBe(false)
+    expect(cfg.hasServerToken).toBe(false)
     expect(cfg.baseUrl).toBe(SANDBOX_BASE_URL)
+    expect(cfg.baseUrlSource).toBe('ARRAY_ENV')
   })
 
   it('stays in mock when only one credential is present', () => {
-    expect(getConfig({ SMARTY_AUTH_ID: 'abc' }).mode).toBe('mock')
-    expect(getConfig({ SMARTY_AUTH_TOKEN: 'abc' }).mode).toBe('mock')
+    expect(getConfig({ ARRAY_APP_KEY: 'abc' }).mode).toBe('mock')
+    expect(getConfig({ ARRAY_SERVER_TOKEN: 'abc' }).mode).toBe('mock')
   })
 
   it('treats whitespace-only values as empty', () => {
-    expect(getConfig({ SMARTY_AUTH_ID: '   ', SMARTY_AUTH_TOKEN: '  ' }).mode).toBe('mock')
+    expect(getConfig({ ARRAY_APP_KEY: '   ', ARRAY_SERVER_TOKEN: '  ' }).mode).toBe('mock')
   })
 
-  it('maps SMARTY_AUTH_ID -> appKey and SMARTY_AUTH_TOKEN -> client token', () => {
+  it('maps ARRAY_APP_KEY -> appKey and ARRAY_SERVER_TOKEN -> the client-token header value', () => {
+    const cfg = getConfig({ ARRAY_APP_KEY: 'APP', ARRAY_SERVER_TOKEN: 'SECRET' })
+    expect(cfg.mode).toBe('sandbox')
+    expect(cfg.appKey).toBe('APP')
+    expect(cfg.serverToken).toBe('SECRET')
+    expect(cfg.warnings).toEqual([])
+  })
+
+  it('accepts ARRAY_CLIENT_TOKEN as a non-deprecated alias of ARRAY_SERVER_TOKEN', () => {
+    const cfg = getConfig({ ARRAY_APP_KEY: 'APP', ARRAY_CLIENT_TOKEN: 'SECRET' })
+    expect(cfg.mode).toBe('sandbox')
+    expect(cfg.serverToken).toBe('SECRET')
+    expect(cfg.warnings).toEqual([])
+  })
+
+  it('accepts the SMARTY_* names only as DEPRECATED aliases, with a warning', () => {
     const cfg = getConfig({ SMARTY_AUTH_ID: 'APP', SMARTY_AUTH_TOKEN: 'SECRET' })
     expect(cfg.mode).toBe('sandbox')
     expect(cfg.appKey).toBe('APP')
-    expect(cfg.clientToken).toBe('SECRET')
+    expect(cfg.serverToken).toBe('SECRET')
+    expect(cfg.warnings.join(' ')).toMatch(/SMARTY_AUTH_ID.*DEPRECADO/)
+    expect(cfg.warnings.join(' ')).toMatch(/SMARTY_AUTH_TOKEN.*DEPRECADO/)
+    // O aviso jamais imprime o valor do segredo.
+    expect(cfg.warnings.join(' ')).not.toContain('SECRET')
   })
 
-  it('accepts ARRAY_* aliases', () => {
-    const cfg = getConfig({ ARRAY_APP_KEY: 'APP', ARRAY_CLIENT_TOKEN: 'SECRET' })
-    expect(cfg.mode).toBe('sandbox')
-    expect(cfg.appKey).toBe('APP')
-  })
-
-  it('prefers SMARTY_* over the aliases', () => {
-    const cfg = getConfig({ SMARTY_AUTH_ID: 'A', ARRAY_APP_KEY: 'B', SMARTY_AUTH_TOKEN: 'T' })
-    expect(cfg.appKey).toBe('A')
+  it('prefers the canonical names over every alias (and then stops warning)', () => {
+    const cfg = getConfig({
+      ARRAY_APP_KEY: 'CANON',
+      SMARTY_AUTH_ID: 'OLD',
+      ARRAY_SERVER_TOKEN: 'CANON-T',
+      ARRAY_CLIENT_TOKEN: 'ALIAS-T',
+      SMARTY_AUTH_TOKEN: 'OLD-T',
+    })
+    expect(cfg.appKey).toBe('CANON')
+    expect(cfg.serverToken).toBe('CANON-T')
+    expect(cfg.warnings).toEqual([])
   })
 
   it('selects the production base URL for ARRAY_ENV=production', () => {
@@ -44,10 +75,208 @@ describe('config / mode', () => {
     expect(cfg.componentsCdn).toBe('https://embed.array.io/cms/')
   })
 
-  it('never exposes the client token in the public status', () => {
-    const status = publicStatus(getConfig({ SMARTY_AUTH_ID: 'APP', SMARTY_AUTH_TOKEN: 'SUPERSECRET' }))
+  it('never exposes the server token in the public status', () => {
+    const status = publicStatus(getConfig({ ARRAY_APP_KEY: 'APP', ARRAY_SERVER_TOKEN: 'SUPERSECRET' }))
     expect(JSON.stringify(status)).not.toContain('SUPERSECRET')
-    expect(status).toMatchObject({ mode: 'sandbox', hasAuthId: true, hasAuthToken: true })
+    expect(status).toMatchObject({ mode: 'sandbox', hasAppKey: true, hasServerToken: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ARRAY_BASE_URL — normalização do sufixo /api
+// ---------------------------------------------------------------------------
+
+describe('ARRAY_BASE_URL normalization', () => {
+  it('appends the /api prefix the user will forget (the value they paste)', () => {
+    expect(normalizeBaseUrl('https://sandbox.array.io')).toBe('https://sandbox.array.io/api')
+  })
+
+  it.each([
+    ['https://sandbox.array.io/', 'https://sandbox.array.io/api'],
+    ['https://sandbox.array.io/api', 'https://sandbox.array.io/api'],
+    ['https://sandbox.array.io/api/', 'https://sandbox.array.io/api'],
+    ['  https://sandbox.array.io/api//  ', 'https://sandbox.array.io/api'],
+    ['https://array.io', 'https://array.io/api'],
+    ['https://array.io/api/', 'https://array.io/api'],
+    ['http://localhost:8788', 'http://localhost:8788/api'],
+    ['http://localhost:8788/api', 'http://localhost:8788/api'],
+  ])('normalizes %s -> %s', (input, expected) => {
+    expect(normalizeBaseUrl(input)).toBe(expected)
+  })
+
+  it('rejects what is not an http(s) URL', () => {
+    expect(normalizeBaseUrl('')).toBeNull()
+    expect(normalizeBaseUrl('sandbox.array.io')).toBeNull()
+    expect(normalizeBaseUrl('ftp://sandbox.array.io')).toBeNull()
+    expect(normalizeBaseUrl('   ')).toBeNull()
+  })
+
+  it('uses ARRAY_BASE_URL as the base and records where it came from', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'https://sandbox.array.io' })
+    expect(cfg.baseUrl).toBe('https://sandbox.array.io/api')
+    expect(cfg.baseUrlSource).toBe('ARRAY_BASE_URL')
+    expect(cfg.arrayEnv).toBe('sandbox')
+  })
+
+  it('derives production (and its CDN) from a non-sandbox host when ARRAY_ENV is absent', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'https://array.io' })
+    expect(cfg.baseUrl).toBe('https://array.io/api')
+    expect(cfg.arrayEnv).toBe('production')
+    expect(cfg.componentsCdn).toBe('https://embed.array.io/cms/')
+  })
+
+  it('lets an explicit ARRAY_ENV win over the host heuristic', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'https://array.io', ARRAY_ENV: 'sandbox' })
+    expect(cfg.arrayEnv).toBe('sandbox')
+    expect(cfg.baseUrl).toBe('https://array.io/api')
+  })
+
+  it('falls back to the ARRAY_ENV host (with a warning) on a broken value', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'nao-e-url' })
+    expect(cfg.baseUrl).toBe(SANDBOX_BASE_URL)
+    expect(cfg.baseUrlSource).toBe('ARRAY_ENV')
+    expect(cfg.warnings.join(' ')).toMatch(/ARRAY_BASE_URL/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ARRAY_AUTH_MODE
+// ---------------------------------------------------------------------------
+
+describe('ARRAY_AUTH_MODE', () => {
+  it('defaults to server (the safe mode)', () => {
+    expect(getConfig({}).authMode).toBe('server')
+    expect(getConfig({ ARRAY_AUTH_MODE: '' }).authMode).toBe('server')
+  })
+
+  it('accepts browser and its synonyms', () => {
+    expect(getConfig({ ARRAY_AUTH_MODE: 'browser' }).authMode).toBe('browser')
+    expect(getConfig({ ARRAY_AUTH_MODE: 'BROWSER' }).authMode).toBe('browser')
+    expect(getConfig({ ARRAY_AUTH_MODE: 'user' }).authMode).toBe('browser')
+  })
+
+  it('falls back to server with a warning on garbage', () => {
+    const cfg = getConfig({ ARRAY_AUTH_MODE: 'sim' })
+    expect(cfg.authMode).toBe('server')
+    expect(cfg.warnings.join(' ')).toMatch(/ARRAY_AUTH_MODE/)
+  })
+
+  it('is exposed in the public status', () => {
+    expect(publicStatus(getConfig({ ARRAY_AUTH_MODE: 'browser' })).authMode).toBe('browser')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ARRAY_POLL_INTERVAL / ARRAY_POLL_TIMEOUT (unidade em segundos: INFERIDA)
+// ---------------------------------------------------------------------------
+
+describe('poll settings', () => {
+  it('defaults to 1.0s / 120s', () => {
+    const cfg = getConfig({})
+    expect(cfg.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_S * 1000)
+    expect(cfg.pollTimeoutMs).toBe(DEFAULT_POLL_TIMEOUT_S * 1000)
+  })
+
+  it('reads SECONDS (float) and converts to ms', () => {
+    const cfg = getConfig({ ARRAY_POLL_INTERVAL: '0.25', ARRAY_POLL_TIMEOUT: '300' })
+    expect(cfg.pollIntervalMs).toBe(250)
+    expect(cfg.pollTimeoutMs).toBe(300_000)
+  })
+
+  it('ignores non-positive / unreadable values, with a warning', () => {
+    const cfg = getConfig({ ARRAY_POLL_INTERVAL: '0', ARRAY_POLL_TIMEOUT: 'abc' })
+    expect(cfg.pollIntervalMs).toBe(1000)
+    expect(cfg.pollTimeoutMs).toBe(120_000)
+    expect(cfg.warnings.filter((w) => /ARRAY_POLL_/.test(w))).toHaveLength(2)
+  })
+
+  it('marks the unit as inferred in the public status', () => {
+    const poll = publicStatus(getConfig({})).poll
+    expect(poll).toMatchObject({ intervalSeconds: 1, timeoutSeconds: 120, unit: 'seconds', unitInferred: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ARRAY_PRODUCT_CODE / ARRAY_IDENTITY
+// ---------------------------------------------------------------------------
+
+describe('ARRAY_PRODUCT_CODE', () => {
+  it('defaults to credmo3bReportScore', () => {
+    expect(getConfig({}).productCode).toBe(DEFAULT_PRODUCT_CODE)
+    expect(DEFAULT_PRODUCT_CODE).toBe('credmo3bReportScore')
+  })
+
+  it('is overridable', () => {
+    expect(getConfig({ ARRAY_PRODUCT_CODE: 'tui1bReportScore' }).productCode).toBe('tui1bReportScore')
+  })
+})
+
+describe('ARRAY_IDENTITY', () => {
+  it('defaults to the BANKER COLDIRON persona', () => {
+    const { identity } = getConfig({})
+    expect(identity.slug).toBe('banker-coldiron')
+    expect(identity.source).toBe('default')
+    expect(identity.confidence).toBe('verified')
+  })
+
+  it('accepts a persona slug in any spelling', () => {
+    for (const raw of ['dalton-lot', 'DALTON_LOT', 'Dalton Lot']) {
+      const { identity } = getConfig({ ARRAY_IDENTITY: raw })
+      expect(identity.slug).toBe('dalton-lot')
+      expect(identity.source).toBe('persona')
+      // Os campos dessas personas são placeholder: o selo tem que dizer isso.
+      expect(identity.confidence).toBe('unverified')
+    }
+  })
+
+  it('accepts inline JSON', () => {
+    const { identity } = getConfig({
+      ARRAY_IDENTITY: JSON.stringify({
+        firstName: 'MARIA',
+        lastName: 'SILVA',
+        dob: '1990-05-05',
+        ssn: '666-11-2222',
+        address: { street: '1 MAIN ST', city: 'AUSTIN', state: 'tx', zip: '78701' },
+      }),
+    })
+    expect(identity).toMatchObject({ firstName: 'MARIA', lastName: 'SILVA', source: 'json', confidence: 'unverified' })
+    expect(identity.ssn).toBe('666112222')
+    expect(identity.address.state).toBe('TX')
+  })
+
+  it('falls back to the default persona with a warning on an unknown value', () => {
+    const cfg = getConfig({ ARRAY_IDENTITY: 'ninguem-conhecido' })
+    expect(cfg.identity.slug).toBe('banker-coldiron')
+    expect(cfg.warnings.join(' ')).toMatch(/ARRAY_IDENTITY/)
+  })
+
+  it('is IGNORED in production (personas only exist in sandbox)', () => {
+    const cfg = getConfig({ ARRAY_ENV: 'production', ARRAY_IDENTITY: 'dalton-lot' })
+    expect(cfg.warnings.join(' ')).toMatch(/persona de teste do SANDBOX/)
+    expect(cfg.identity.source).toBe('default')
+    expect(publicStatus(cfg).identity.sandboxOnly).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Webhook config
+// ---------------------------------------------------------------------------
+
+describe('webhook config', () => {
+  it('reports the listener URL and never the token', () => {
+    const cfg = getConfig({ ARRAY_LISTENER_URL: 'https://meu.host/api/webhooks/array/abc', ARRAY_WEBHOOK_TOKEN: 'SEGREDO-DO-PATH' })
+    const status = publicStatus(cfg)
+    expect(status.webhook).toMatchObject({
+      listenerUrl: 'https://meu.host/api/webhooks/array/abc',
+      configured: true,
+      secretInPathInferred: true,
+      registrationIsManual: true,
+    })
+    expect(JSON.stringify(status.webhook)).not.toContain('SEGREDO-DO-PATH')
+  })
+
+  it('reports "not configured" without ARRAY_WEBHOOK_TOKEN', () => {
+    expect(publicStatus(getConfig({})).webhook).toMatchObject({ configured: false, listenerUrl: null })
   })
 })
 

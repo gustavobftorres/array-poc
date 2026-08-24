@@ -6,6 +6,18 @@ import { Card, Empty, ErrorBox, Json, TokenChip, useAsync } from '../components/
 const PRODUCTS = [
   { code: 'credmo3bReportScore', label: 'credmo3bReportScore — 3 bureaus + score' },
   { code: 'exp1bScore', label: 'exp1bScore — Experian, só score' },
+  { code: 'tui1bReportScore', label: 'tui1bReportScore — TransUnion, relatório + score' },
+]
+
+/**
+ * Simulação do ciclo de geração — só existe no MOCK. Na Array real quem decide
+ * o status é ela: 202 = ainda gerando (repetir), 200 = pronto, 204 = falha
+ * PERMANENTE (VERIFICADO em docs.array.com/docs/how-to-retrieve-a-credit-report).
+ */
+const SIMULATIONS = [
+  { code: 'ready', label: 'pronto na 1ª leitura (200)' },
+  { code: 'pending-then-ready', label: '202, 202 → 200 (ainda gerando, depois pronto)' },
+  { code: 'pending-then-failure', label: '202, 202 → 204 (falha permanente)' },
 ]
 
 const money = (n: number) => `US$ ${n.toLocaleString('en-US')}`
@@ -92,11 +104,19 @@ export function CreditReportPage() {
   const { session, patch, status } = useSession()
   const [clientKey, setClientKey] = useState(session.clientKey)
   const [productCode, setProductCode] = useState(PRODUCTS[0].code)
+  const [simulate, setSimulate] = useState('ready')
   const order = useAsync<{ reportKey: string; displayToken: string; productCode: string }>()
   const report = useAsync<CreditReport>()
 
   const run = async () => {
-    const o = await order.run(() => api.orderReport({ clientKey: clientKey.trim(), productCode }))
+    const o = await order.run(() =>
+      api.orderReport({
+        clientKey: clientKey.trim(),
+        productCode,
+        // Só o mock entende isto; em sandbox o campo é ignorado pelo worker.
+        ...(status?.mode === 'mock' && simulate !== 'ready' ? { simulate } : {}),
+      }),
+    )
     if (!o) return
     patch({
       clientKey: clientKey.trim(),
@@ -109,7 +129,8 @@ export function CreditReportPage() {
       api.getReport({ reportKey: o.reportKey, displayToken: o.displayToken, clientKey: clientKey.trim() }),
     )
     // Passos 5 e 6 do Guia são eventos distintos: pedir o relatório e recebê-lo
-    // preenchido (ele pode voltar vazio por alguns segundos).
+    // pronto. O worker faz o polling pelo status HTTP (202 repete, 200 pronto,
+    // 204 falha permanente) usando ARRAY_POLL_INTERVAL/ARRAY_POLL_TIMEOUT.
     if (got) patch({ reportFetchedAt: new Date().toISOString() })
   }
 
@@ -169,17 +190,27 @@ export function CreditReportPage() {
       <Card title="Pedir relatório">
         <div className="row" style={{ alignItems: 'flex-end' }}>
           <div style={{ flex: '1 1 300px' }}>
-            <label>clientKey</label>
-            <input value={clientKey} onChange={(e) => setClientKey(e.target.value)} placeholder="clientKey autenticado" />
+            <label htmlFor="report-client-key">clientKey</label>
+            <input id="report-client-key" value={clientKey} onChange={(e) => setClientKey(e.target.value)} placeholder="clientKey autenticado" />
           </div>
           <div style={{ flex: '1 1 260px' }}>
-            <label>productCode</label>
-            <select value={productCode} onChange={(e) => setProductCode(e.target.value)}>
+            <label htmlFor="report-product-code">productCode</label>
+            <select id="report-product-code" value={productCode} onChange={(e) => setProductCode(e.target.value)}>
               {PRODUCTS.map((p) => (
                 <option key={p.code} value={p.code}>{p.label}</option>
               ))}
             </select>
           </div>
+          {status?.mode === 'mock' && (
+            <div style={{ flex: '1 1 300px' }}>
+              <label htmlFor="report-simulate">simular geração (só no mock)</label>
+              <select id="report-simulate" value={simulate} onChange={(e) => setSimulate(e.target.value)}>
+                {SIMULATIONS.map((p) => (
+                  <option key={p.code} value={p.code}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <button className="primary" onClick={run} disabled={!clientKey.trim() || order.loading || report.loading}>
             {order.loading || report.loading ? 'Pedindo…' : 'Pedir e buscar'}
           </button>
@@ -187,6 +218,16 @@ export function CreditReportPage() {
         </div>
         <ErrorBox error={order.error} />
         <ErrorBox error={report.error} />
+        <p className="hint" style={{ marginTop: 10, marginBottom: 0 }}>
+          O <code>GET /report/v2</code> faz <strong>polling por status HTTP</strong>:{' '}
+          <code>202</code> = ainda gerando (repetir), <code>200</code> = pronto, <code>204</code> = falha{' '}
+          <strong>permanente</strong> (aborta na hora) — critério documentado pela Array. Intervalo{' '}
+          <code>{status?.poll.intervalSeconds ?? 1}s</code> e timeout <code>{status?.poll.timeoutSeconds ?? 120}s</code>{' '}
+          vêm de <code>ARRAY_POLL_INTERVAL</code>/<code>ARRAY_POLL_TIMEOUT</code> — a unidade{' '}
+          <span className="badge warn">// UNVERIFIED</span> (segundos é inferência: a Array não publica valores).
+          Os tokens valem <strong>uma</strong> recuperação: para reler o mesmo relatório, renove com{' '}
+          <code>PUT /report/v2</code> em vez de pedir (e pagar) outro.
+        </p>
         {order.data && (
           <dl className="kv" style={{ marginTop: 12 }}>
             <dt>reportKey</dt>

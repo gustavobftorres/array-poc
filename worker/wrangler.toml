@@ -13,4 +13,10 @@ binding = "CACHE"
 id = "local-cache"
 
 [vars]
+# Defaults públicos (segredos vivem em worker/.dev.vars / secrets, nunca aqui).
 ARRAY_ENV = "sandbox"
+ARRAY_AUTH_MODE = "server"
+ARRAY_PRODUCT_CODE = "credmo3bReportScore"
+# Unidade em SEGUNDOS: // UNVERIFIED (a Array não publica valores recomendados).
+ARRAY_POLL_INTERVAL = "1.0"
+ARRAY_POLL_TIMEOUT = "120"

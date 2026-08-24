@@ -21,7 +21,29 @@ import path from 'node:path'
 const root = process.cwd()
 const ENV = path.join(root, '.env')
 const DEV_VARS = path.join(root, 'worker/.dev.vars')
-const KEYS = ['SMARTY_AUTH_ID', 'SMARTY_AUTH_TOKEN', 'ARRAY_APP_KEY', 'ARRAY_CLIENT_TOKEN', 'ARRAY_ENV']
+/**
+ * Contrato canônico (docs/ARRAY_ENV_VARS.md) + aliases. A ordem é a que o
+ * `.dev.vars` gerado usa; `SMARTY_*` só continua na lista para não quebrar quem
+ * ainda tem o nome antigo no `.env` — o worker avisa que estão DEPRECADOS.
+ */
+const CANONICAL = [
+  'ARRAY_APP_KEY',
+  'ARRAY_SERVER_TOKEN',
+  'ARRAY_BASE_URL',
+  'ARRAY_ENV',
+  'ARRAY_AUTH_MODE',
+  'ARRAY_IDENTITY',
+  'ARRAY_PRODUCT_CODE',
+  'ARRAY_POLL_INTERVAL',
+  'ARRAY_POLL_TIMEOUT',
+  'ARRAY_LISTENER_URL',
+  'ARRAY_WEBHOOK_TOKEN',
+]
+const ALIASES = ['ARRAY_CLIENT_TOKEN']
+const DEPRECATED = ['SMARTY_AUTH_ID', 'SMARTY_AUTH_TOKEN']
+const KEYS = [...CANONICAL, ...ALIASES, ...DEPRECATED]
+/** As que decidem se a POC sai do modo mock. */
+const CREDENTIAL_KEYS = ['ARRAY_APP_KEY', 'ARRAY_SERVER_TOKEN', 'ARRAY_CLIENT_TOKEN', ...DEPRECATED]
 
 const log = (m) => console.log(`[sync-env] ${m}`)
 
@@ -46,9 +68,17 @@ if (!fs.existsSync(ENV)) {
 }
 
 const env = parse(ENV)
-const filled = KEYS.filter((k) => k !== 'ARRAY_ENV' && env[k])
+const filled = CREDENTIAL_KEYS.filter((k) => env[k])
 const existing = parse(DEV_VARS)
-const existingFilled = KEYS.filter((k) => k !== 'ARRAY_ENV' && existing[k])
+const existingFilled = CREDENTIAL_KEYS.filter((k) => existing[k])
+
+for (const k of DEPRECATED) {
+  if (env[k]) {
+    log(
+      `${k} está DEPRECADO (nome errado): renomeie para ${k === 'SMARTY_AUTH_ID' ? 'ARRAY_APP_KEY' : 'ARRAY_SERVER_TOKEN'} no .env`,
+    )
+  }
+}
 
 if (filled.length === 0 && existingFilled.length > 0) {
   log('.env na raiz está sem credenciais e worker/.dev.vars já tem — mantendo o .dev.vars intacto')

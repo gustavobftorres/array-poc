@@ -129,7 +129,7 @@ async function main() {
     if (await tsBtn.count()) {
       await tsBtn.click(); await page.waitForTimeout(300)
       const code = await page.locator('.step .snippet pre').first().innerText()
-      if (!/ARRAY_CLIENT_TOKEN|client token/.test(code)) note('P1', 'Integração: exemplo TypeScript não mostra o client token no servidor')
+      if (!/ARRAY_SERVER_TOKEN|ARRAY_CLIENT_TOKEN|client token/.test(code)) note('P1', 'Integração: exemplo TypeScript não mostra o client token no servidor')
     } else note('P1', 'Integração: sem alternância curl/TypeScript')
     await shot('16b-integracao-typescript')
   }

@@ -73,10 +73,10 @@ interface Step {
  * viajava como parte do valor do header e a Array respondia 401/400 (X-001).
  */
 const SHELL_ENV = `# 0) segredos e chaves ficam no SHELL, não no snippet:
-#      export ARRAY_CLIENT_TOKEN='...'   # SEGREDO de servidor: nunca no browser
+#      export ARRAY_SERVER_TOKEN='...'   # SEGREDO de servidor: nunca no browser
 #      export ARRAY_APP_KEY='...'        # público por design (36 caracteres)`
 
-const CLIENT_TOKEN_HEADER = `  -H "x-credmo-client-token: $ARRAY_CLIENT_TOKEN" \\`
+const CLIENT_TOKEN_HEADER = `  -H "x-credmo-client-token: $ARRAY_SERVER_TOKEN" \\`
 
 const STEPS: Step[] = [
   {
@@ -123,7 +123,7 @@ export async function criarConsumidor(identidade: Identidade): Promise<string> {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-credmo-client-token': process.env.ARRAY_CLIENT_TOKEN!, // segredo
+      'x-credmo-client-token': process.env.ARRAY_SERVER_TOKEN!, // segredo
     },
     // appKey vai no CORPO das chamadas de API, não só no loader do browser.
     body: JSON.stringify({ appKey: process.env.ARRAY_APP_KEY!, ...identidade }),
@@ -255,7 +255,7 @@ export async function tokenDoUsuario(userId: string): Promise<{ userToken: strin
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-credmo-client-token': process.env.ARRAY_CLIENT_TOKEN!,
+      'x-credmo-client-token': process.env.ARRAY_SERVER_TOKEN!,
     },
     body: JSON.stringify({ appKey: process.env.ARRAY_APP_KEY!, clientKey, ttlInMinutes }),
   })
@@ -363,7 +363,7 @@ export async function pedirRelatorio(clientKey: string, productCode = 'credmo3bR
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-credmo-client-token': process.env.ARRAY_CLIENT_TOKEN!,
+      'x-credmo-client-token': process.env.ARRAY_SERVER_TOKEN!,
     },
     body: JSON.stringify({ appKey: process.env.ARRAY_APP_KEY!, clientKey, productCode }),
   })
@@ -379,55 +379,61 @@ export async function pedirRelatorio(clientKey: string, productCode = 'credmo3bR
   {
     n: 6,
     id: 'get-report',
-    title: 'Buscar o relatório (com espera) e renovar o displayToken',
+    title: 'Buscar o relatório (polling 202/200/204) e renovar o displayToken',
     lane: 'server',
     arrayRoute: 'GET /report/v2?reportKey=…&displayToken=…  ·  PUT /report/v2',
     pocRoute: 'GET /api/array/report  ·  PUT /api/array/report',
     backend: [
       'Buscar o conteúdo com reportKey + displayToken na query — este par É a autenticação da leitura.',
-      'Tolerar relatório vazio: ele pode demorar alguns segundos depois do pedido. A integração de referência repete a cada 3 s até vir conteúdo.',
+      'Fazer o polling pelo STATUS HTTP, não pelo corpo: 202 = ainda gerando (repita), 200 = pronto, 204 = falha PERMANENTE (aborte já, não adianta repetir).',
+      'Usar intervalo e timeout configuráveis (aqui: ARRAY_POLL_INTERVAL e ARRAY_POLL_TIMEOUT, em segundos) em vez de um sleep hard-coded.',
       'Nunca fazer esse polling no browser com o client token: quem espera é o SEU backend (ou o componente, com o userToken dele).',
-      'Renovar com PUT /report/v2 { clientKey, reportKey } quando o displayToken expirar — devolve um displayToken novo, sem pedir outro relatório (nem gastar outro produto).',
+      'Contar que os tokens valem UMA recuperação: eles seguem válidos durante os 202, mas depois do 200 é preciso renovar com PUT /report/v2 para reler.',
+      'Renovar com PUT /report/v2 { clientKey, reportKey } quando o displayToken expirar ou for reusado — devolve um displayToken novo, sem pedir outro relatório (nem gastar outro produto).',
       'Guardar o payload se você for reexibi-lo: esta POC grava o JSON no D1 para sobreviver a um F5.',
     ],
     produces: 'relatório (JSON) — score, tradelines, consultas, cobranças',
     confidence: 'verified',
     facts: [
-      { level: 'verified', text: 'GET /report/v2?reportKey=&displayToken= e o retry de 3000 ms enquanto a resposta vem vazia (visto na integração de referência).' },
+      { level: 'verified', text: 'GET /report/v2?reportKey=&displayToken= e o critério de conclusão por STATUS: "A 202 HTTP status means that the API is still generating the report, in which case you should repeat the call until it returns 200 (success) or 204 (failure)" (docs.array.com/docs/how-to-retrieve-a-credit-report).' },
+      { level: 'verified', text: 'Os tokens continuam válidos durante as chamadas iteradas — e valem UMA recuperação: "The tokens are good for one retrieval, only." Para reler, renove com PUT /report/v2.' },
       { level: 'verified', text: 'PUT /report/v2 com { clientKey, reportKey } e o header do client token renova o displayToken.' },
       { level: 'verified', text: 'Formatos documentados: JSON, XML, PDF e HTML.' },
       { level: 'unverified', text: 'O esquema completo do envelope do relatório (esta POC modela um subconjunto e sempre guarda o payload cru).' },
-      { level: 'unverified', text: 'O critério de "relatório ainda vazio": a integração de referência só diz "repita até response.data estar populado" (§3.6) e não promete nenhum campo em particular — os snippets aqui testam corpo não-vazio e diferente de {} em vez de procurar "reportKey".' },
+      { level: 'unverified', text: 'A UNIDADE de ARRAY_POLL_INTERVAL/ARRAY_POLL_TIMEOUT (segundos) e os valores default 1,0 s / 120 s: a Array não publica intervalo nem timeout recomendados. Fonte TERCEIRA (integração da Forth) descreve re-tentativas de bureau em 1 min + 1 min, com falha permanente na 3ª — se isso valer para a sua conta, 120 s pode ser curto: considere 300 s ou espere o webhook.' },
       { level: 'unverified', text: '401/403 = displayToken expirado: §6 registra que os shapes de autenticação/autorização não são públicos (os status observados foram 400 e 404). Trate qualquer 4xx como erro que NÃO melhora esperando, e renove o displayToken com o PUT antes de reler.' },
     ],
     curl: `${SHELL_ENV}
 #      export REPORT_KEY='...' DISPLAY_TOKEN='...'   # do passo 5
+#      export ARRAY_POLL_INTERVAL=1.0                # segundos (// UNVERIFIED: unidade inferida)
+#      export ARRAY_POLL_TIMEOUT=120                 # segundos (// UNVERIFIED: unidade inferida)
 
-# o relatório pode voltar vazio por alguns segundos: espere, não desista.
-# ATENÇÃO: esperar só faz sentido para 2xx vazio. Um 401/403/404 não melhora
-# com o tempo — aborte e mostre o corpo, senão você depura "relatório lento"
-# quando o problema é credencial (Y-002).
-for tentativa in 1 2 3 4 5 6 7 8 9 10; do
+# O critério é o STATUS HTTP, não o corpo (documentado pela Array):
+#   202 = ainda gerando  -> repita
+#   200 = pronto         -> use o corpo
+#   204 = FALHA PERMANENTE -> aborte AGORA (repetir não resolve)
+# Qualquer 4xx também não melhora esperando: mostre o corpo e pare (Y-002).
+fim=$(( $(date +%s) + \${ARRAY_POLL_TIMEOUT:-120} ))
+tentativa=0
+while :; do
+  tentativa=$(( tentativa + 1 ))
   resposta=$(curl -sS -G -w '\\n%{http_code}' https://sandbox.array.io/api/report/v2 \\
     --data-urlencode "reportKey=$REPORT_KEY" \\
     --data-urlencode "displayToken=$DISPLAY_TOKEN")
   status=$(printf '%s' "$resposta" | tail -n1)
   corpo=$(printf '%s' "$resposta" | sed '$d')
-  if [ "$status" != "200" ]; then
-    echo "HTTP $status na tentativa $tentativa — abortando (não é relatório vazio):" >&2
-    printf '%s\\n' "$corpo" >&2
-    exit 1
-  fi
-  # "populado" aqui = corpo que não é vazio nem {} — ver o selo // UNVERIFIED
-  if [ -n "$corpo" ] && [ "$(printf '%s' "$corpo" | tr -d ' \\n\\t')" != "{}" ]; then
-    printf '%s\\n' "$corpo"
-    break
-  fi
-  echo "HTTP 200 vazio na tentativa $tentativa — esperando 3 s" >&2
-  sleep 3
+  case "$status" in
+    200) printf '%s\\n' "$corpo"; break ;;
+    204) echo "HTTP 204 na tentativa $tentativa — falha PERMANENTE da geração; peça outro relatório" >&2; exit 1 ;;
+    202) echo "HTTP 202 na tentativa $tentativa — ainda gerando, repetindo" >&2 ;;
+    *)   echo "HTTP $status na tentativa $tentativa — abortando:" >&2; printf '%s\\n' "$corpo" >&2; exit 1 ;;
+  esac
+  [ "$(date +%s)" -ge "$fim" ] && { echo "timeout de \${ARRAY_POLL_TIMEOUT:-120}s ainda em 202" >&2; exit 1; }
+  sleep "\${ARRAY_POLL_INTERVAL:-1}"
 done
 
-# displayToken expirado? renove sem pedir outro relatório:
+# os tokens valem UMA recuperação: para RELER, renove o displayToken
+# (também é o que fazer se ele expirar) — sem pedir outro relatório:
 curl -sS -X PUT https://sandbox.array.io/api/report/v2 \\
   -H "content-type: application/json" \\
 ${CLIENT_TOKEN_HEADER}
@@ -436,23 +442,36 @@ ${CLIENT_TOKEN_HEADER}
 JSON
 # -> { "displayToken": "novo..." }`,
     ts: `// SERVIDOR — o relatório não sai pronto: espere no backend, não no browser.
+// O critério é o STATUS HTTP (documentado): 202 repete, 200 pronto, 204 falha
+// PERMANENTE. Nunca inspecione o corpo para decidir se "ainda está vindo".
 const espera = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+// Unidade em SEGUNDOS: // UNVERIFIED (a Array não publica valores).
+const INTERVALO_MS = Number(process.env.ARRAY_POLL_INTERVAL ?? 1) * 1000
+const TIMEOUT_MS = Number(process.env.ARRAY_POLL_TIMEOUT ?? 120) * 1000
+
+export class RelatorioFalhouPermanentemente extends Error {}
+export class DisplayTokenExpirado extends Error {}
 
 export async function buscarRelatorio(reportKey: string, displayToken: string) {
   const url = \`/report/v2?reportKey=\${reportKey}&displayToken=\${displayToken}\`
-  for (let tentativa = 0; tentativa < 10; tentativa++) {
+  const limite = Date.now() + TIMEOUT_MS
+  for (let tentativa = 1; ; tentativa++) {
     const res = await arrayGet(url)
-    // Qualquer 4xx: NÃO espere. 401/403 = displayToken expirado é inferência
-    // desta POC (// UNVERIFIED — ver os selos deste passo).
+    if (res.status === 200) return await res.json()
+    // 204 = falha permanente: abortar aqui é o ponto. Tratar 204 como "ainda
+    // vazio" faz o loop girar até o timeout — era o bug da versão anterior.
+    if (res.status === 204) throw new RelatorioFalhouPermanentemente(\`204 na tentativa \${tentativa}\`)
     if (res.status === 401 || res.status === 403) throw new DisplayTokenExpirado()
-    if (!res.ok) throw new Error(\`Array /report/v2 -> \${res.status} \${await res.text()}\`)
-    const dados = await res.json()
-    if (dados && Object.keys(dados).length > 0) return dados
-    await espera(3000) // a integração de referência repete a cada 3 s
+    if (res.status !== 202) throw new Error(\`Array /report/v2 -> \${res.status} \${await res.text()}\`)
+    if (Date.now() + INTERVALO_MS > limite) {
+      throw new Error(\`ainda 202 depois de \${TIMEOUT_MS / 1000}s (\${tentativa} tentativas)\`)
+    }
+    await espera(INTERVALO_MS)
   }
-  throw new Error('relatório continuou vazio após 10 tentativas')
 }
 
+// Os tokens valem UMA recuperação: para reler o MESMO relatório, renove.
 export async function renovarDisplayToken(clientKey: string, reportKey: string) {
   const res = await arrayPut('/report/v2', { clientKey, reportKey })
   return (await res.json()) as { displayToken: string }
@@ -522,7 +541,7 @@ function Flow() {
           <rect x="256" y="152" width="220" height="86" rx="8" />
           <text x="270" y="176" className="node-n">6</text>
           <text x="288" y="176" className="node-t">Buscar relatório</text>
-          <text x="270" y="198" className="node-c">GET /report/v2 (retry 3 s)</text>
+          <text x="270" y="198" className="node-c">GET /report/v2 (202 → 200/204)</text>
           <text x="270" y="218" className="node-o">→ JSON · PUT renova o token</text>
         </g>
 
@@ -686,7 +705,7 @@ export function IntegrationGuide() {
             que o seu backend precisa expor.
           </p>
           <p className="hint">
-            Regra única que resume tudo: o <strong>client token</strong> (<code>SMARTY_AUTH_TOKEN</code> nesta POC) é
+            Regra única que resume tudo: o <strong>client token</strong> (<code>ARRAY_SERVER_TOKEN</code> nesta POC) é
             segredo de servidor e nunca aparece em HTML, JS ou request do browser. O <strong>appKey</strong> é público
             por design (e vai também no <em>corpo</em> das chamadas de API) e o <strong>userToken</strong> é de curta
             duração — é ele, e só ele, que atravessa a fronteira.
@@ -814,7 +833,7 @@ export function IntegrationGuide() {
         <Card title="O que NUNCA vai ao browser">
           <ul className="small" style={{ margin: '0 0 0 18px' }}>
             <li>
-              <strong>client token</strong> (<code>x-credmo-client-token</code> / <code>SMARTY_AUTH_TOKEN</code>): dá
+              <strong>client token</strong> (<code>x-credmo-client-token</code> / <code>ARRAY_SERVER_TOKEN</code>): dá
               acesso a todos os consumidores da sua conta. Só no servidor, só em variável de ambiente.
             </li>
             <li>
@@ -902,9 +921,19 @@ export function IntegrationGuide() {
                 <td>Servidor: chaves de sandbox e de produção não se misturam</td>
               </tr>
               <tr>
-                <td>Relatório volta vazio logo depois de pedir</td>
+                <td><code>202</code> no <code>GET /report/v2</code></td>
                 <td>o relatório ainda está sendo montado pelos bureaus</td>
-                <td>Servidor: retry de 3 s no passo 6, nunca no browser</td>
+                <td>Servidor: repetir com <code>ARRAY_POLL_INTERVAL</code> até 200/204, nunca no browser</td>
+              </tr>
+              <tr>
+                <td><code>204</code> no <code>GET /report/v2</code></td>
+                <td>falha <strong>permanente</strong> da geração</td>
+                <td>Servidor: abortar já e pedir outro relatório — repetir não resolve</td>
+              </tr>
+              <tr>
+                <td>Leitura recusada na SEGUNDA vez, logo depois de um 200</td>
+                <td>os tokens valem <strong>uma</strong> recuperação</td>
+                <td>Servidor: <code>PUT /report/v2</code> antes de reler (passo 6)</td>
               </tr>
               <tr>
                 <td>Leitura do relatório recusada horas depois</td>

@@ -8,6 +8,7 @@
  */
 import type {
   Alert,
+  GetReportArgs,
   AnswerKbaResult,
   ArrayProvider,
   CreateUserInput,
@@ -20,18 +21,32 @@ import type {
   UserTokenResult,
 } from './types'
 import { ArrayApiError } from './types'
+import { pollReport, type PollOptions } from './poll'
 
 export interface ClientOptions {
   baseUrl: string
   appKey: string
+  /** `x-credmo-client-token` — o segredo de servidor (ARRAY_SERVER_TOKEN). */
   clientToken: string
+  /**
+   * Trava explícita do ARRAY_AUTH_MODE. Em `browser` o client token NUNCA é
+   * anexado: uma chamada sem `userToken` falha em vez de vazar o segredo.
+   */
+  authMode?: 'server' | 'browser'
+  /** Defaults de polling do relatório (ARRAY_POLL_*). */
+  pollIntervalMs?: number
+  pollTimeoutMs?: number
   timeoutMs?: number
   attempts?: number
   fetchImpl?: typeof fetch
+  /** Injetável nos testes do loop de polling. */
+  sleepImpl?: (ms: number) => Promise<void>
 }
 
 const DEFAULT_TIMEOUT_MS = 12_000
 const DEFAULT_ATTEMPTS = 3
+const DEFAULT_POLL_INTERVAL_MS = 1_000
+const DEFAULT_POLL_TIMEOUT_MS = 120_000
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -48,11 +63,13 @@ interface RequestSpec {
 
 export class ArrayClient implements ArrayProvider {
   readonly mode = 'sandbox' as const
+  readonly authMode: 'server' | 'browser'
   private readonly timeoutMs: number
   private readonly attempts: number
   private readonly fetchImpl: typeof fetch
 
   constructor(private readonly opts: ClientOptions) {
+    this.authMode = opts.authMode ?? 'server'
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.attempts = opts.attempts ?? DEFAULT_ATTEMPTS
     // Must be bound: calling an unbound `fetch` as a method throws
@@ -70,13 +87,33 @@ export class ArrayClient implements ArrayProvider {
     return url.toString()
   }
 
-  private headers(spec: RequestSpec): Record<string, string> {
+  /**
+   * INVARIANTE do ARRAY_AUTH_MODE (não é convenção: é testado).
+   *  - `server`  → `x-credmo-client-token`, salvo quando a chamada traz um
+   *                userToken (aí ele manda) ou é anônima (capability token).
+   *  - `browser` → SOMENTE `x-credmo-user-token`. O client token não pode ser
+   *                anexado nem por engano; sem userToken a chamada FALHA.
+   */
+  headers(spec: RequestSpec): Record<string, string> {
     const h: Record<string, string> = {
       accept: 'application/json',
       'Content-Type': 'application/json',
     }
-    if (spec.userToken) h['x-credmo-user-token'] = spec.userToken
-    else if (!spec.anonymous) h['x-credmo-client-token'] = this.opts.clientToken
+    if (spec.userToken) {
+      h['x-credmo-user-token'] = spec.userToken
+      return h
+    }
+    if (spec.anonymous) return h
+    if (this.authMode === 'browser') {
+      throw new ArrayApiError(
+        `ARRAY_AUTH_MODE=browser: ${spec.method} ${spec.path} exige x-credmo-user-token e o client token NUNCA pode ser anexado neste modo. ` +
+          'Emita um userToken (POST /authenticate/v2/usertoken) e repasse-o, ou volte para ARRAY_AUTH_MODE=server.',
+        400,
+        { authMode: this.authMode, path: spec.path },
+        'auth_mode',
+      )
+    }
+    h['x-credmo-client-token'] = this.opts.clientToken
     return h
   }
 
@@ -152,6 +189,62 @@ export class ArrayClient implements ArrayProvider {
       }
     }
     throw lastError ?? new ArrayApiError('Unknown Array API failure', 502, undefined, 'network')
+  }
+
+  /**
+   * Uma tentativa de leitura do relatório, SEM tratar 202/204 como erro — o
+   * loop de polling decide (array/poll.ts). Erros de rede/timeout e 4xx/5xx
+   * continuam virando ArrayApiError.
+   */
+  private async reportAttempt(reportKey: string, displayToken: string): Promise<{ status: number; body?: unknown }> {
+    const url = this.buildUrl('/report/v2', { reportKey, displayToken })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const res = await this.fetchImpl(url, {
+        method: 'GET',
+        // capability tokens na query SÃO a autenticação desta leitura
+        headers: this.headers({ method: 'GET', path: '/report/v2', anonymous: true }),
+        signal: controller.signal,
+      })
+      if (res.status === 202 || res.status === 204) return { status: res.status }
+      const text = await res.text()
+      let parsed: unknown = undefined
+      try {
+        parsed = text ? JSON.parse(text) : undefined
+      } catch {
+        parsed = { raw: text.slice(0, 2000) }
+      }
+      if (!res.ok) {
+        const message =
+          (parsed && typeof parsed === 'object' && 'message' in parsed
+            ? String((parsed as { message: unknown }).message)
+            : undefined) ?? `Array API ${res.status}`
+        const proxyBlocked =
+          (res.status === 403 || res.status === 407 || res.status === 405) &&
+          !(parsed && typeof parsed === 'object' && 'message' in parsed)
+        throw new ArrayApiError(
+          proxyBlocked ? `Host ${new URL(url).host} bloqueado pelo proxy de egresso (HTTP ${res.status})` : message,
+          res.status,
+          parsed,
+          proxyBlocked ? 'blocked' : 'http',
+        )
+      }
+      return { status: 200, body: parsed }
+    } catch (e) {
+      if (e instanceof ArrayApiError) throw e
+      const aborted = e instanceof Error && e.name === 'AbortError'
+      const msg = e instanceof Error ? e.message : String(e)
+      const blocked = /403|405|407|blocked|forbidden|proxy|ENOTFOUND|EAI_AGAIN|certificate/i.test(msg)
+      throw new ArrayApiError(
+        aborted ? `Timeout after ${this.timeoutMs}ms calling GET /report/v2` : `Network error calling GET /report/v2: ${msg}`,
+        aborted ? 504 : 502,
+        { message: msg },
+        aborted ? 'timeout' : blocked ? 'blocked' : 'network',
+      )
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   // -- users ---------------------------------------------------------------
@@ -250,17 +343,28 @@ export class ArrayClient implements ArrayProvider {
     }
   }
 
-  /** GET /report/v2?reportKey&displayToken — retrieve the report payload. */
-  async getReport({ reportKey, displayToken }: { reportKey: string; displayToken: string; clientKey?: string }): Promise<CreditReport> {
-    const res = await this.request<Record<string, unknown>>({
-      method: 'GET',
-      path: '/report/v2',
-      query: { reportKey, displayToken },
-      anonymous: true, // capability tokens in the query string are the auth
-    })
+  /**
+   * GET /report/v2?reportKey&displayToken — com o POLLING documentado:
+   * 202 = ainda gerando (repetir), 200 = pronto, 204 = falha PERMANENTE
+   * (aborta na hora). Ver array/poll.ts.
+   *
+   * Os tokens valem UMA recuperação bem-sucedida (VERIFICADO): eles seguem
+   * válidos durante os 202, mas depois do 200 é preciso renovar com
+   * `PUT /report/v2` para reler.
+   */
+  async getReport({ reportKey, displayToken, poll }: GetReportArgs): Promise<CreditReport> {
+    const opts: PollOptions = {
+      intervalMs: poll?.intervalMs ?? this.opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      timeoutMs: poll?.timeoutMs ?? this.opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+      sleep: this.opts.sleepImpl,
+    }
+    const { value } = await pollReport<Record<string, unknown>>(
+      () => this.reportAttempt(reportKey, displayToken),
+      opts,
+    )
     // Array's report envelope is far richer than the POC's view model; the raw
     // payload is always returned alongside so nothing is silently dropped.
-    return res as unknown as CreditReport
+    return value as unknown as CreditReport
   }
 
   /** PUT /report/v2 — refresh an expired displayToken. */

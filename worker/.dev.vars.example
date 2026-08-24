@@ -1,15 +1,27 @@
 # Copie para worker/.dev.vars (o wrangler dev carrega esse arquivo automaticamente).
-# Deixe VAZIO para rodar em modo mock (fixtures, sem rede).
+# Normalmente NÃO é preciso: `npm run dev` gera este arquivo a partir do `.env`
+# da raiz (scripts/sync-env.mjs). Deixe VAZIO para rodar em modo mock.
 #
-# Mapeamento (veja docs/ARRAY_API_RESEARCH.md §2):
-#   SMARTY_AUTH_ID    -> Array appKey            (UUID de 36 chars, público por design)
-#   SMARTY_AUTH_TOKEN -> Array client token      (x-credmo-client-token, SEGREDO)
-SMARTY_AUTH_ID=
-SMARTY_AUTH_TOKEN=
-
-# Aliases aceitos com os nomes reais da Array (use estes OU os SMARTY_*).
-# ARRAY_APP_KEY=
-# ARRAY_CLIENT_TOKEN=
+# Significado de cada variável: docs/ARRAY_ENV_VARS.md
+#   ARRAY_APP_KEY      -> Array appKey (UUID de 36 chars, público por design)
+#   ARRAY_SERVER_TOKEN -> header x-credmo-client-token (SEGREDO de servidor)
+ARRAY_APP_KEY=
+ARRAY_SERVER_TOKEN=
 
 # sandbox | production
 ARRAY_ENV=sandbox
+
+# server (default) | browser — em `browser` o client token nunca é anexado
+ARRAY_AUTH_MODE=server
+
+# Opcionais (todas com default)
+# ARRAY_BASE_URL=https://sandbox.array.io
+# ARRAY_IDENTITY=banker-coldiron
+# ARRAY_PRODUCT_CODE=credmo3bReportScore
+ARRAY_POLL_INTERVAL=1.0
+ARRAY_POLL_TIMEOUT=120
+# ARRAY_LISTENER_URL=
+# ARRAY_WEBHOOK_TOKEN=
+
+# Aliases: ARRAY_CLIENT_TOKEN (= ARRAY_SERVER_TOKEN) e, DEPRECADOS,
+# SMARTY_AUTH_ID / SMARTY_AUTH_TOKEN (avisam no boot).

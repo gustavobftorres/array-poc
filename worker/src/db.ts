@@ -166,3 +166,53 @@ export async function listApiCalls(db: D1Database, limit: number, offset: number
 export async function clearApiCalls(db: D1Database) {
   return safe('clearApiCalls', () => db.prepare(`DELETE FROM api_calls`).run())
 }
+
+// ---------------------------------------------------------------------------
+// Webhooks (ciclo 13)
+// ---------------------------------------------------------------------------
+
+export interface WebhookEventRow {
+  id: string
+  received_at: string
+  event_type: string
+  client_key: string | null
+  report_key: string | null
+  source: string
+  payload: string | null
+  created_at: string
+}
+
+/**
+ * Persiste um evento recebido no listener. O payload passa pela mesma redação
+ * de PII/segredos do Inspector — o token do path NUNCA chega aqui.
+ */
+export async function insertWebhookEvent(
+  db: D1Database,
+  args: { eventType: string; clientKey?: string | null; reportKey?: string | null; source: 'array' | 'simulated'; payload: unknown },
+) {
+  const id = uid()
+  await safe('insertWebhookEvent', () =>
+    db
+      .prepare(
+        `INSERT INTO webhook_events (id, received_at, event_type, client_key, report_key, source, payload, created_at)
+         VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .bind(id, now(), args.eventType, args.clientKey ?? null, args.reportKey ?? null, args.source, redactedJson(args.payload ?? null), now())
+      .run(),
+  )
+  return id
+}
+
+export async function listWebhookEvents(db: D1Database, limit = 50) {
+  const res = await safe('listWebhookEvents', () =>
+    db.prepare(`SELECT * FROM webhook_events ORDER BY received_at DESC, rowid DESC LIMIT ?`).bind(limit).all(),
+  )
+  const total = await safe('countWebhookEvents', () =>
+    db.prepare(`SELECT COUNT(*) AS n FROM webhook_events`).first<{ n: number }>(),
+  )
+  return { rows: (res?.results ?? []) as unknown as WebhookEventRow[], total: total?.n ?? 0 }
+}
+
+export async function clearWebhookEvents(db: D1Database) {
+  return safe('clearWebhookEvents', () => db.prepare(`DELETE FROM webhook_events`).run())
+}

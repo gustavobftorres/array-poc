@@ -15,9 +15,13 @@ como integrar ao nosso produto.
 | Proxy | Vite dev server com proxy `/api` -> Worker (`localhost:8787`) |
 
 ## Princípios
-1. **Credenciais nunca no browser.** `SMARTY_AUTH_ID` / `SMARTY_AUTH_TOKEN`
-   ficam apenas no Worker (`.dev.vars`). O frontend só recebe `userToken`
-   de curta duração para alimentar os Web Components.
+1. **Credenciais nunca no browser.** `ARRAY_APP_KEY` / `ARRAY_SERVER_TOKEN`
+   ficam apenas no Worker (`.env` da raiz → `worker/.dev.vars`). O frontend só
+   recebe `userToken` de curta duração para alimentar os Web Components.
+   (Os nomes `SMARTY_*` do plano original estavam errados — ver a nota
+   histórica no README; hoje são apenas aliases deprecados.)
+   `ARRAY_AUTH_MODE=browser` é a trava explícita disso: nesse modo o worker não
+   pode nem anexar o client token.
 2. **Modo mock.** Sem credenciais a POC roda 100% com fixtures, para que o
    frontend seja explorável antes de o usuário colar as chaves no `.env`.
    Com credenciais, o mesmo endpoint chama o sandbox da Array.

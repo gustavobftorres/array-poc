@@ -75,19 +75,21 @@ fs.writeFileSync(path.join(TMP, 'steps.json'), JSON.stringify(steps, null, 2))
 // -------------------------------------------------------------- curl checks
 const env = {
   ...process.env,
-  ARRAY_CLIENT_TOKEN: SECRET,
+  ARRAY_SERVER_TOKEN: SECRET,
   ARRAY_APP_KEY: APP_KEY,
   CLIENT_KEY: 'FF9CDBA5-1111-4222-8333-444444444444',
   AUTH_TOKEN: 'AUTH-1',
   REPORT_KEY: 'REPORT-KEY-1',
   DISPLAY_TOKEN: 'DISPLAY-TOKEN-1',
+  ARRAY_POLL_INTERVAL: '0',
+  ARRAY_POLL_TIMEOUT: '10',
 }
 
 for (const s of steps) {
   const isHtml = /<script/.test(s.curl)
   if (isHtml) {
     // passo do browser: sem curl para executar; só checa que não tem segredo
-    if (/credmo-client-token|ARRAY_CLIENT_TOKEN/.test(s.curl)) add(`passo ${s.i}: snippet de BROWSER menciona o client token`)
+    if (/credmo-client-token|ARRAY_SERVER_TOKEN|ARRAY_CLIENT_TOKEN/.test(s.curl)) add(`passo ${s.i}: snippet de BROWSER menciona o client token`)
     if (!/array-web-component\.js[\s\S]*\.js\?appKey=/.test(s.curl)) add(`passo ${s.i}: ordem runtime→bundle não confere`)
     continue
   }

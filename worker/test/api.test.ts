@@ -47,8 +47,10 @@ describe('meta routes', () => {
     const json = await res.json()
     expect(json).toMatchObject({
       mode: 'mock',
-      hasAuthId: false,
-      hasAuthToken: false,
+      hasAppKey: false,
+      hasServerToken: false,
+      authMode: 'server',
+      productCode: 'credmo3bReportScore',
       arrayEnv: 'sandbox',
       baseUrl: 'https://sandbox.array.io/api',
       componentsCdn: 'https://embed.sandbox.array.io/cms/',
@@ -416,7 +418,7 @@ describe('sandbox mode failure handling', () => {
   it('returns a graceful error (not a crash) when array.io is unreachable', async () => {
     const res = await app.fetch(
       new Request('http://local/api/array/authenticate?clientKey=K'),
-      { DB: db as unknown as D1Database, CACHE: {} as KVNamespace, SMARTY_AUTH_ID: 'APP', SMARTY_AUTH_TOKEN: 'SECRET' } as never,
+      { DB: db as unknown as D1Database, CACHE: {} as KVNamespace, ARRAY_APP_KEY: 'APP', ARRAY_SERVER_TOKEN: 'SECRET' } as never,
     )
     expect([400, 403, 405, 407, 502, 504]).toContain(res.status)
     const json = await res.json()
@@ -470,8 +472,8 @@ describe('userToken cache namespacing (W-001)', () => {
       {
         DB: db as unknown as D1Database,
         CACHE: fakeKv() as unknown as KVNamespace,
-        SMARTY_AUTH_ID: 'APP',
-        SMARTY_AUTH_TOKEN: 'SECRET',
+        ARRAY_APP_KEY: 'APP',
+        ARRAY_SERVER_TOKEN: 'SECRET',
       } as never,
     )
     const text = await res.text()
@@ -740,5 +742,129 @@ describe('parameter and date borders (Y-007)', () => {
       expect(hard.every((q) => q.date >= cutoff), JSON.stringify(hard)).toBe(true)
       expect(r.summary.inquiries6mo).toBe(hard.length)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ciclo 13 — polling do relatório no mock e persona de ARRAY_IDENTITY
+// ---------------------------------------------------------------------------
+
+describe('simulação de 202/200/204 no mock', () => {
+  const fast = { ARRAY_POLL_INTERVAL: '0.001', ARRAY_POLL_TIMEOUT: '5' }
+  const callWith = (path: string, init?: RequestInit, extra: Record<string, unknown> = fast) =>
+    app.fetch(new Request(`http://local${path}`, init), {
+      DB: db as unknown as D1Database,
+      CACHE: fakeKv() as unknown as KVNamespace,
+      ...extra,
+    } as never)
+  const postWith = (path: string, bodyObj: unknown, extra: Record<string, unknown> = fast) =>
+    callWith(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyObj) }, extra)
+
+  const order = async (simulate?: string) => {
+    const user = (await (await postWith('/api/array/user', DEMO)).json()) as { clientKey: string }
+    return (await (
+      await postWith('/api/array/report', { clientKey: user.clientKey, ...(simulate ? { simulate } : {}) })
+    ).json()) as { reportKey: string; displayToken: string; productCode: string; simulate?: string }
+  }
+
+  it('sem simulação o relatório vem na primeira leitura', async () => {
+    const o = await order()
+    const res = await callWith(`/api/array/report?reportKey=${o.reportKey}&displayToken=${o.displayToken}`)
+    expect(res.status).toBe(200)
+    expect((await res.json()).score).toBeGreaterThan(0)
+  })
+
+  it('202 -> 200: o loop espera e devolve o relatório', async () => {
+    const o = await order('pending-then-ready')
+    expect(o.simulate).toBe('pending-then-ready')
+    const res = await callWith(`/api/array/report?reportKey=${o.reportKey}&displayToken=${o.displayToken}`)
+    expect(res.status).toBe(200)
+    expect((await res.json()).reportKey).toBe(o.reportKey)
+  })
+
+  it('202 -> 204: falha PERMANENTE, com erro claro e sem esperar o timeout', async () => {
+    const o = await order('pending-then-failure')
+    const started = Date.now()
+    const res = await callWith(`/api/array/report?reportKey=${o.reportKey}&displayToken=${o.displayToken}`)
+    expect(res.status).toBe(502)
+    const json = await res.json()
+    expect(json.kind).toBe('report_failed')
+    expect(json.message).toMatch(/PERMANENTE/)
+    expect(json.hint).toMatch(/204/)
+    // 5s de ARRAY_POLL_TIMEOUT: se girasse até o fim isso não passaria.
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
+
+  it('o timeout do polling é reportado como 504 e cita a variável', async () => {
+    // Intervalo grande e timeout minúsculo: o 202 da simulação estoura a janela.
+    const o = await order('pending-then-ready')
+    const res = await callWith(
+      `/api/array/report?reportKey=${o.reportKey}&displayToken=${o.displayToken}`,
+      undefined,
+      { ARRAY_POLL_INTERVAL: '0.05', ARRAY_POLL_TIMEOUT: '0.01' },
+    )
+    expect(res.status).toBe(504)
+    const json = await res.json()
+    expect(json.kind).toBe('timeout')
+    expect(json.message).toMatch(/ARRAY_POLL_TIMEOUT/)
+  })
+
+  it('a simulação é do MOCK e é anunciada como tal', async () => {
+    const o = await order('pending-then-ready')
+    expect(o.simulate).toBe('pending-then-ready')
+  })
+})
+
+describe('ARRAY_IDENTITY no seed e em /api/personas', () => {
+  const withEnv = (extra: Record<string, unknown>) => ({
+    DB: db as unknown as D1Database,
+    CACHE: fakeKv() as unknown as KVNamespace,
+    ...extra,
+  }) as never
+
+  it('lista as personas conhecidas com selo e só os 4 últimos do SSN', async () => {
+    const res = await app.fetch(new Request('http://local/api/personas'), withEnv({}))
+    const json = await res.json()
+    expect(json.personas.map((p: { slug: string }) => p.slug)).toEqual([
+      'banker-coldiron',
+      'dalton-lot',
+      'denise-hennessy',
+      'donald-blair',
+    ])
+    expect(json.sandboxOnly).toBe(true)
+    expect(json.active.slug).toBe('banker-coldiron')
+    // Em SANDBOX o SSN da persona de teste sai inteiro (é o que pré-preenche o
+    // Enrollment); é dado fictício da faixa 666, publicado pela Array.
+    expect(json.personas[0].ssn).toBe('666230560')
+    expect(json.personas[0].ssnLast4).toBe('0560')
+  })
+
+  it('em produção a persona não vem com SSN', async () => {
+    const res = await app.fetch(new Request('http://local/api/personas'), withEnv({ ARRAY_ENV: 'production' }))
+    const json = await res.json()
+    expect(json.arrayEnv).toBe('production')
+    expect(json.personas.every((p: { ssn: string | null }) => p.ssn === null)).toBe(true)
+    expect(JSON.stringify(json)).not.toContain('666230560')
+  })
+
+  it('o seed usa a persona de ARRAY_IDENTITY', async () => {
+    const res = await app.fetch(
+      new Request('http://local/api/seed', { method: 'POST' }),
+      withEnv({ ARRAY_IDENTITY: 'denise-hennessy' }),
+    )
+    const json = await res.json()
+    expect(json.seeded).toBe(true)
+    expect(json.identity).toMatchObject({ slug: 'denise-hennessy', source: 'persona' })
+    expect(json.demoUser).toMatchObject({ firstName: 'DENISE', lastName: 'HENNESSY' })
+    expect(json.demoUser.ssn).toMatch(/^\*\*\*-\*\*-\d{4}$/)
+    expect(json.productCode).toBe('credmo3bReportScore')
+  })
+
+  it('o seed respeita o ARRAY_PRODUCT_CODE', async () => {
+    const res = await app.fetch(
+      new Request('http://local/api/seed', { method: 'POST' }),
+      withEnv({ ARRAY_PRODUCT_CODE: 'tui1bReportScore' }),
+    )
+    expect((await res.json()).productCode).toBe('tui1bReportScore')
   })
 })

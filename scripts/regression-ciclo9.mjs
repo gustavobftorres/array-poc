@@ -135,7 +135,8 @@ const set = (id, v, ev) => {
 
 // ============================================================ Y-002 (servidor)
 // Upstream próprio em PROCESSO SEPARADO: 401 sempre em /api/report/v2 (reportKey
-// A) e 200 vazio duas vezes depois corpo real (reportKey B). Tem que ser outro
+// A), 202 duas vezes e depois 200 com corpo (reportKey B) e 204 na primeira
+// (reportKey C) — o critério documentado do ciclo 13. Tem que ser outro
 // processo — execFileSync bloqueia o event loop, então um servidor no mesmo
 // processo nunca aceitaria a conexão do curl (e o snippet pareceria não pedir
 // nada).
@@ -153,8 +154,18 @@ http
     if (u.pathname === '/api/report/v2' && req.method === 'GET') {
       if (u.searchParams.get('reportKey') === 'B') {
         b++
+        // 202 = ainda gerando (duas vezes), depois 200 com o corpo real.
+        if (b <= 2) {
+          res.writeHead(202)
+          return res.end()
+        }
         res.writeHead(200, { 'content-type': 'application/json' })
-        return res.end(b <= 2 ? '{}' : '{"score":712}')
+        return res.end('{"score":712}')
+      }
+      if (u.searchParams.get('reportKey') === 'C') {
+        // 204 = falha PERMANENTE: o snippet tem que abortar na primeira.
+        res.writeHead(204)
+        return res.end()
       }
       res.writeHead(401, { 'content-type': 'application/json' })
       return res.end('{"message":"Unauthorized: client token invalido"}')
@@ -235,12 +246,19 @@ const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM 
   const s6 = stepTexts[5] ?? ''
   const bad3 = []
   const seals = [...s6.matchAll(/\/\/ UNVERIFIED/g)].length
-  if (!/relat[óo]rio ainda vazio|corpo n[ãa]o-vazio/i.test(s6) || !/UNVERIFIED/.test(s6))
-    bad3.push('critério de "relatório vazio" sem selo // UNVERIFIED no passo 6')
+  // Ciclo 13: o critério de conclusão passou a ser o STATUS HTTP documentado —
+  // ele é VERIFICADO; o que continua inferido é a UNIDADE do intervalo/timeout.
+  if (!/202/.test(s6) || !/200/.test(s6) || !/204/.test(s6))
+    bad3.push('o passo 6 não descreve o critério documentado 202/200/204')
+  if (!/UNVERIFIED/.test(s6)) bad3.push('passo 6 sem nenhum selo // UNVERIFIED')
+  if (!/ARRAY_POLL_(INTERVAL|TIMEOUT)/.test(s6))
+    bad3.push('o passo 6 não cita ARRAY_POLL_INTERVAL/ARRAY_POLL_TIMEOUT')
+  if (!/(UNIDADE|unidade)[^.]*segundos/.test(s6))
+    bad3.push('a unidade (segundos) do polling não está marcada como inferida no passo 6')
   if (!/401\/403/.test(s6)) bad3.push('mapeamento 401/403 não aparece nos selos do passo 6')
   bad3.forEach(add)
   set('Y-003', bad3.length ? 'NAO CORRIGIDO' : 'CORRIGIDO',
-    `${seals} selos // UNVERIFIED no passo 6, cobrindo o critério de vazio e o 401/403`)
+    `${seals} selos // UNVERIFIED no passo 6, cobrindo a unidade do polling e o 401/403; critério 202/200/204 presente`)
 
   // ---- Y-002: extrai o curl do passo 6 e executa contra o upstream próprio
   const c6 = cards.nth(5)
@@ -251,11 +269,13 @@ const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM 
 
   const rewrite = (s, rk) =>
     s.replace(/https:\/\/sandbox\.array\.io\/api/g, `http://127.0.0.1:${PORT9}/api`)
-      .replace(/^export ARRAY_CLIENT_TOKEN=.*$/m, '')
+      .replace(/^export ARRAY_SERVER_TOKEN=.*$/m, '')
       .replace(/\$REPORT_KEY/g, rk)
   const env = {
     ...process.env,
-    ARRAY_CLIENT_TOKEN: 'SEGREDO',
+    ARRAY_SERVER_TOKEN: 'SEGREDO',
+    ARRAY_POLL_INTERVAL: '0.2',
+    ARRAY_POLL_TIMEOUT: '10',
     ARRAY_APP_KEY: '11111111-2222-4333-8444-555555555555',
     CLIENT_KEY: 'CK-1',
     REPORT_KEY: 'A',
@@ -283,20 +303,29 @@ const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM 
   }
   const a = run(rewrite(curl6, 'A'))
   const b = run(rewrite(curl6, 'B'))
+  const cc = run(rewrite(curl6, 'C'))
   const bad2 = []
   const ha = upHits('A')
   const hb = upHits('B')
+  const hc = upHits('C')
   if (ha !== 1) bad2.push(`401: o snippet fez ${ha} requisições (esperado 1, abortar na primeira)`)
   if (a.ms > 8000) bad2.push(`401: o snippet esperou ${a.ms} ms antes de desistir`)
   if (!/401/.test(a.err + a.out)) bad2.push('401: o snippet não imprimiu o status')
   if (!/Unauthorized/.test(a.err + a.out)) bad2.push('401: o snippet não imprimiu o corpo do erro')
-  if (hb !== 3) bad2.push(`200 vazio: fez ${hb} requisições (esperado 3: {} , {} , corpo)`)
-  if (!/712/.test(b.out)) bad2.push('200 vazio: o snippet não imprimiu o corpo quando ele finalmente chegou')
+  if (hb !== 3) bad2.push(`202→200: fez ${hb} requisições (esperado 3: 202, 202, 200)`)
+  if (!/712/.test(b.out)) bad2.push('202→200: o snippet não imprimiu o corpo quando ele finalmente chegou')
+  if (b.code !== 0) bad2.push(`202→200: o snippet saiu com ${b.code} num caso de sucesso`)
+  // 204 = falha permanente: uma requisição, saída não-zero, e RÁPIDO (o bug
+  // antigo girava até o timeout tratando 204 como "ainda vazio").
+  if (hc !== 1) bad2.push(`204: fez ${hc} requisições (esperado 1, abortar imediatamente)`)
+  if (cc.code === 0) bad2.push('204: o snippet saiu com 0 numa falha permanente')
+  if (!/204/.test(cc.err + cc.out)) bad2.push('204: o snippet não imprimiu o status')
+  if (cc.ms > 3000) bad2.push(`204: o snippet esperou ${cc.ms} ms antes de desistir`)
   bad2.forEach(add)
   fs.writeFileSync(path.join(TMP, 'y002.log'),
-    `=== 401 ===\nexit=${a.code} ms=${a.ms}\nSTDOUT\n${a.out}\nSTDERR\n${a.err}\n=== 200 vazio ===\nexit=${b.code} ms=${b.ms}\nSTDOUT\n${b.out}\nSTDERR\n${b.err}\n`)
+    `=== 401 ===\nexit=${a.code} ms=${a.ms}\nSTDOUT\n${a.out}\nSTDERR\n${a.err}\n=== 202->200 ===\nexit=${b.code} ms=${b.ms}\nSTDOUT\n${b.out}\nSTDERR\n${b.err}\n=== 204 ===\nexit=${cc.code} ms=${cc.ms}\nSTDOUT\n${cc.out}\nSTDERR\n${cc.err}\n`)
   set('Y-002', bad2.length ? 'NAO CORRIGIDO' : 'CORRIGIDO',
-    `401: ${ha} req, exit ${a.code} em ${a.ms} ms, stderr "${a.err.replace(/\s+/g, ' ').trim().slice(0, 120)}" · 200 vazio: ${hb} req, corpo impresso`)
+    `401: ${ha} req, exit ${a.code} em ${a.ms} ms · 202→200: ${hb} req, corpo impresso · 204: ${hc} req, exit ${cc.code} em ${cc.ms} ms`)
 }
 
 // ====================================================================== Y-004

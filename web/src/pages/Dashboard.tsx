@@ -96,8 +96,8 @@ export function Dashboard() {
 
       <div className="grid cols-4">
         <Stat label="Modo" value={status?.mode.toUpperCase() ?? '…'} badge={<span className={`badge ${status?.mode === 'sandbox' ? 'ok' : 'warn'}`}>{status?.mode === 'sandbox' ? 'chamando a Array' : 'fixtures locais'}</span>} />
-        <Stat label="SMARTY_AUTH_ID (appKey)" value={status?.hasAuthId ? 'presente' : 'ausente'} badge={<span className={`badge ${status?.hasAuthId ? 'ok' : 'danger'}`}>{status?.hasAuthId ? 'ok' : 'preencher .dev.vars'}</span>} />
-        <Stat label="SMARTY_AUTH_TOKEN (client token)" value={status?.hasAuthToken ? 'presente' : 'ausente'} badge={<span className={`badge ${status?.hasAuthToken ? 'ok' : 'danger'}`}>{status?.hasAuthToken ? 'ok' : 'preencher .dev.vars'}</span>} />
+        <Stat label="ARRAY_APP_KEY (appKey)" value={status?.hasAppKey ? 'presente' : 'ausente'} badge={<span className={`badge ${status?.hasAppKey ? 'ok' : 'danger'}`}>{status?.hasAppKey ? 'ok' : 'preencher .env'}</span>} />
+        <Stat label="ARRAY_SERVER_TOKEN (x-credmo-client-token)" value={status?.hasServerToken ? 'presente' : 'ausente'} badge={<span className={`badge ${status?.hasServerToken ? 'ok' : 'danger'}`}>{status?.hasServerToken ? 'ok' : 'preencher .env'}</span>} />
         <Stat label="Usuários no D1" value={status?.users ?? users.length} />
       </div>
 
@@ -107,7 +107,43 @@ export function Dashboard() {
             <dt>ARRAY_ENV</dt>
             <dd>{status?.arrayEnv ?? '—'}</dd>
             <dt>Base URL</dt>
-            <dd className="mono">{status?.baseUrl ?? '—'}</dd>
+            <dd className="mono">
+              {status?.baseUrl ?? '—'}{' '}
+              <span className="badge neutral">
+                {status?.baseUrlSource === 'ARRAY_BASE_URL' ? 'ARRAY_BASE_URL' : 'derivada do ARRAY_ENV'}
+              </span>
+            </dd>
+            <dt>ARRAY_AUTH_MODE</dt>
+            <dd>
+              <span className={`badge ${status?.authMode === 'browser' ? 'warn' : 'ok'}`}>
+                {status?.authMode ?? '—'}
+              </span>{' '}
+              <span className="small muted">
+                {status?.authMode === 'browser'
+                  ? 'só x-credmo-user-token — o client token não pode ser anexado'
+                  : 'x-credmo-client-token sai do worker'}
+              </span>
+            </dd>
+            <dt>ARRAY_PRODUCT_CODE</dt>
+            <dd className="mono">{status?.productCode ?? '—'}</dd>
+            <dt>ARRAY_POLL_*</dt>
+            <dd>
+              intervalo {status?.poll.intervalSeconds ?? '—'}s · timeout {status?.poll.timeoutSeconds ?? '—'}s{' '}
+              {status?.poll.unitInferred && <span className="badge warn">// UNVERIFIED (unidade)</span>}
+            </dd>
+            <dt>ARRAY_IDENTITY</dt>
+            <dd>
+              {status?.identity.label ?? '—'}{' '}
+              <span className={`badge ${status?.identity.confidence === 'verified' ? 'ok' : 'warn'}`}>
+                {status?.identity.confidence === 'verified' ? 'verificado' : '// UNVERIFIED'}
+              </span>{' '}
+              <span className="badge neutral">só sandbox</span>
+            </dd>
+            <dt>ARRAY_LISTENER_URL</dt>
+            <dd className="mono" style={{ overflowWrap: 'anywhere' }}>
+              {status?.webhook.listenerUrl ?? 'não configurada'}{' '}
+              <Link className="small" to="/webhooks">ver Webhooks</Link>
+            </dd>
             <dt>CDN dos componentes</dt>
             <dd className="mono">{status?.componentsCdn ?? '—'}</dd>
             <dt>appKey</dt>
@@ -116,8 +152,19 @@ export function Dashboard() {
             </dd>
           </dl>
           <p className="hint" style={{ marginTop: 10 }}>
-            O client token nunca sai do worker — o frontend só vê booleanos e o <code>userToken</code> de curta duração.
+            O <code>ARRAY_SERVER_TOKEN</code> nunca sai do worker — o frontend só vê booleanos e o{' '}
+            <code>userToken</code> de curta duração.
           </p>
+          {!!status?.warnings.length && (
+            <div className="alert-box warn" style={{ marginTop: 10 }}>
+              <strong>Avisos de configuração</strong>
+              <ul className="small" style={{ margin: '6px 0 0 18px' }}>
+                {status.warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Card>
 
         <Card title="Sessão de trabalho">

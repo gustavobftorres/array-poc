@@ -5,6 +5,8 @@
  */
 import type {
   Alert,
+  GetReportArgs,
+  ReportSimulation,
   AnswerKbaResult,
   ArrayProvider,
   CreateUserInput,
@@ -19,6 +21,7 @@ import type {
   UserTokenResult,
 } from './types'
 import { ArrayApiError } from './types'
+import { pollReport } from './poll'
 import { ssnLast4 } from '../redact'
 import { calendarAge, monthsAgoISO } from '../dates'
 
@@ -614,7 +617,26 @@ export class MockArrayProvider implements ArrayProvider {
     return { reportKey, displayToken, productCode, clientKey }
   }
 
-  async getReport({ reportKey, displayToken, clientKey }: { reportKey: string; displayToken: string; clientKey?: string }) {
+  /**
+   * Simulação do ciclo de geração: quantos 202 faltam e qual o desfecho.
+   * Chave: reportKey. Configurada em `POST /api/array/report` (campo
+   * `simulate`), que é um recurso DESTA POC, não da Array.
+   */
+  private simulations = new Map<string, { pending: number; outcome: 'ready' | 'failure' }>()
+
+  /** Programa a simulação de um reportKey (mock only). */
+  planSimulation(reportKey: string, simulate: ReportSimulation | undefined): void {
+    if (!simulate || simulate === 'ready') {
+      this.simulations.delete(reportKey)
+      return
+    }
+    this.simulations.set(reportKey, {
+      pending: 2,
+      outcome: simulate === 'pending-then-failure' ? 'failure' : 'ready',
+    })
+  }
+
+  async getReport({ reportKey, displayToken, clientKey, poll, simulate }: GetReportArgs) {
     // Same registry rule as alerts/monitoring/usertoken: an unknown clientKey
     // is a 400 here too, instead of silently handing out the report (W-010).
     if (clientKey) requireConsumer(clientKey)
@@ -632,7 +654,27 @@ export class MockArrayProvider implements ArrayProvider {
         error: [{ value: '', message: 'this reportKey does not belong to the given clientKey', param: 'clientKey', location: 'query' }],
       })
     }
-    return mockReport(known.clientKey, known.productCode, reportKey, consumerIndex.get(known.clientKey))
+    if (simulate) this.planSimulation(reportKey, simulate)
+    const plan = this.simulations.get(reportKey)
+    const ready = () => mockReport(known.clientKey, known.productCode, reportKey, consumerIndex.get(known.clientKey))
+    if (!plan) return ready()
+
+    // O MESMO loop do cliente real (array/poll.ts): 202 → repetir,
+    // 200 → pronto, 204 → falha permanente. Aqui os status são simulados.
+    const { value } = await pollReport<CreditReport>(
+      () => {
+        if (plan.pending > 0) {
+          plan.pending--
+          return Promise.resolve({ status: 202 })
+        }
+        this.simulations.delete(reportKey)
+        return Promise.resolve(
+          plan.outcome === 'failure' ? { status: 204 } : { status: 200, body: ready() },
+        )
+      },
+      { intervalMs: poll?.intervalMs ?? 1000, timeoutMs: poll?.timeoutMs ?? 120_000 },
+    )
+    return value
   }
 
   async refreshDisplayToken({ clientKey, reportKey }: { clientKey: string; reportKey: string }) {

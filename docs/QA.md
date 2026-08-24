@@ -38,7 +38,7 @@ Os binários disponíveis:
 | Script | O que faz | Saída |
 |---|---|---|
 | `bash scripts/smoke-api.sh` | 42 casos HTTP de abuso contra `:8787` (payload de 2 MB, JSON quebrado, chaves inexistentes, path traversal, clamp de paginação, registro do mock no `GET /report`, TTL/refresh do cache de userToken) | `pass=42 fail=0` |
-| `PW_CHROMIUM=… node scripts/e2e-smoke.mjs` | percorre as 8 telas (inclui `/integracao`: 6 passos, diagrama, alternância curl/TypeScript, estado da sessão), roda o fluxo Enrollment→KBA→Report→Alerts, testa reload, foco por Tab e mobile 390px; grava `docs/screenshots/` | lista de achados (vazia = ok) |
+| `PW_CHROMIUM=… node scripts/e2e-smoke.mjs` | percorre as telas (inclui `/integracao`: 6 passos, diagrama, alternância curl/TypeScript, estado da sessão), roda o fluxo Enrollment→KBA→Report→Alerts, testa reload, foco por Tab e mobile 390px; grava `docs/screenshots/` | lista de achados (vazia = ok) |
 | `PW_CHROMIUM=… node scripts/snippet-check.mjs` | **valida o snippet do Playground de verdade**: copia o snippet real de 5 componentes da UI, cola em HTML em branco, sobe um http-server local e abre no Chromium; afere HTML válido, custom element no DOM, ordem dos scripts, `appKey` de 36 chars, listener de `array-event` e ausência de `SyntaxError`. Desde o ciclo 5 também cola um snippet **hostil** (`true" onload="alert(1)` num atributo + nome de atributo inválido via `prompt`) e afere que nenhum handler executável chega ao DOM, que a árvore não desloca e que a linha `userToken` sai sempre com a explicação de origem/TTL | `snippet-check: 0 achado(s)`; artefatos em `scripts/.tmp-snippets/` |
 | `PW_CHROMIUM=… node scripts/regression-ciclo3.mjs` | checagens de navegador dos IDs V-005…V-020 (labels, auto-load, tiles, base em mock, hint do Inspector, catálogo, overflow mobile 8/8 — com `/integracao` —, console limpo) + `GET /api/status` por visita (W-014) e se o input de atributo ainda estoura (V-018/W-015) | uma linha por ID |
 | `PW_CHROMIUM=… node scripts/guide-check-ciclo6.mjs` | **prova que o Guia de Integração é colável** (ciclo 6): lê os 6 pares de snippet da tela, roda `bash -n` em cada `curl`, **executa** cada um contra o worker local com o host reescrito (exigindo `clientKey`/`authToken`/`userToken`/`reportKey`/`score` na resposta), compila cada snippet TypeScript com `tsc --strict`, e afere `appKey` em todo body, ausência de comentário dentro de header, selos verificado/inferido e o estado por passo (sessão limpa = 0/6; semeada = **1/6** desde o ciclo 9 — Y-001 tirou o passo 5 de "reportKey presente" e o pôs no evento `reportOrderedAt`, e o `/api/seed` pede o relatório no servidor) | `0 achado(s)` |
@@ -47,10 +47,10 @@ Os binários disponíveis:
 | `PW_CHROMIUM=… node scripts/hostile-attrname-ciclo7.mjs` | 19 nomes de atributo hostis pelo `prompt` do Playground (case, espaços, homoglifos, `data-on*`, `formaction`, `href`, `xlink:href`, `background`) e cola cada snippet num HTML em branco instrumentado com `window.__pwned` | **19/19 recusados** desde o ciclo 9 (Y-004 fechou os 5 atributos de URL — `href`, `formaction`, `background`, `xlink:href`, `data-onload`); 0 execuções, 0 achados |
 | `PW_CHROMIUM=… node scripts/step-state-ciclo7.mjs` | os 6 estados de passo do Guia em 6 cenários com `localStorage` limpo; monta um componente **de verdade** stubando o CDN da Array por `page.route` (o botão é **Montar componente**, não há auto-mount) | limpa 0/6 · semeada **1/6** · enrollment 1/6 · KBA 2/6 · usertoken **2/6** · componente 1/6 · **0 achados desde o ciclo 11** (Z-001: o evento do passo 4 é escopado à aba pelo `sessionStorage` e limpo no **Desmontar**, na falha de carga do CDN e ao reabrir o Playground sem componente montado, então a aba 6b sem stub já não conta o mount de outra aba) |
 | `node scripts/report-audit-ciclo7.mjs [N]` | cria N consumidores, pede/busca o relatório e recomputa tudo do JSON cru (campos do summary: `inquiries6mo`, `oldestAccountYears`, `revolving*`) | `report-audit-ciclo7: 0 achado(s)` |
-| `PW_CHROMIUM=… node scripts/walkthrough-ciclo7.mjs` | 9 alvos (as 8 telas + a rota inexistente) em desktop e mobile 390px, console, ≥400, tema (`☾ Escuro`/`☀ Claro`), F5 no meio do fluxo e a coerência da contagem de usuários; grava `docs/screenshots/qa7-*` | `0 achado(s)` desde o ciclo 9 (Y-006 corrigido: a tela imprime o `total`) |
-| `PW_CHROMIUM=… node scripts/regression-ciclo9.mjs` | **regressão independente dos 7 `Y-*` (ciclo 9)**: um veredito por ID com evidência própria — transpila `worker/src/dates.ts` com `esbuild` e varre 37 datas (dias 29/30/31, bissexto, virada de ano), recomputa a janela de consultas de 8 relatórios do JSON cru, extrai o `curl` do passo 6 da tela e o executa contra um **upstream próprio** que responde 401 e 200-vazio (o upstream roda em **outro processo** — `execFileSync` bloqueia o event loop, e um servidor no mesmo processo nunca aceitaria a conexão do curl), e cruza a recusa de nomes de atributo com os **20 atributos reais** da Array (§4.3 da pesquisa). Detalhe que custa tempo: sem `no_proxy=127.0.0.1` o `curl` do snippet vai para o proxy de egresso até para o loopback | `regression-ciclo9: 0 achado(s)` + `verdict.json` em `scripts/.tmp-ciclo9/` |
+| `PW_CHROMIUM=… node scripts/walkthrough-ciclo7.mjs` | 9 alvos (as telas + a rota inexistente) em desktop e mobile 390px, console, ≥400, tema (`☾ Escuro`/`☀ Claro`), F5 no meio do fluxo e a coerência da contagem de usuários; grava `docs/screenshots/qa7-*` | `0 achado(s)` desde o ciclo 9 (Y-006 corrigido: a tela imprime o `total`) |
+| `PW_CHROMIUM=… node scripts/regression-ciclo9.mjs` | **regressão independente dos 7 `Y-*` (ciclo 9)**: um veredito por ID com evidência própria — transpila `worker/src/dates.ts` com `esbuild` e varre 37 datas (dias 29/30/31, bissexto, virada de ano), recomputa a janela de consultas de 8 relatórios do JSON cru, extrai o `curl` do passo 6 da tela e o executa contra um **upstream próprio** que responde 401, `202`→`202`→`200` e `204` (o critério documentado, desde o ciclo 13) (o upstream roda em **outro processo** — `execFileSync` bloqueia o event loop, e um servidor no mesmo processo nunca aceitaria a conexão do curl), e cruza a recusa de nomes de atributo com os **20 atributos reais** da Array (§4.3 da pesquisa). Detalhe que custa tempo: sem `no_proxy=127.0.0.1` o `curl` do snippet vai para o proxy de egresso até para o loopback | `regression-ciclo9: 0 achado(s)` + `verdict.json` em `scripts/.tmp-ciclo9/` |
 | `PW_CHROMIUM=… node scripts/step4-stuck-ciclo9.mjs` | caracteriza o Z-001 em 3 cenários no mesmo `localStorage`: CDN stubado + **Montar componente** → **Desmontar** (elemento fora do DOM) → aba nova com o CDN bloqueado | desde o ciclo 11 (Z-001) os três batem com o DOM: **A** feito (`1/6`) · **B** **pendente** (`0/6`) — reabrir o Playground sem componente montado limpa o evento · **C** **pendente** (`0/6`) — outra aba não conta |
-| `npm --workspace worker run test` | vitest (67 testes; inclui namespace do cache de userToken, idade por calendário e aritmética do relatório) | 67 passed |
+| `npm --workspace worker run test` | vitest (139 testes desde o ciclo 13; inclui namespace do cache de userToken, idade por calendário, aritmética do relatório, normalização do `ARRAY_BASE_URL`, a invariante do `ARRAY_AUTH_MODE`, o polling 202/200/204 + timeout e o token/persistência do webhook) | 139 passed |
 | `npm --workspace worker run typecheck` / `npm --workspace web run build` | tsc + vite | sem erros |
 
 Todos os `scripts/.tmp-*/` (`.tmp-snippets`, `.tmp-hostile`, `.tmp-attr7`, `.tmp-guide7`,
@@ -80,8 +80,8 @@ exercita mais o envelope de truncamento.
 - **Modo SANDBOX para testar caminhos de erro**: suba um segundo worker sem tocar no `.dev.vars`:
   ```bash
   cd worker && npx wrangler dev --local --port 8788 \
-    --var SMARTY_AUTH_ID:11111111-2222-4333-8444-555555555555 \
-    --var SMARTY_AUTH_TOKEN:SUPERSECRETTOKEN123
+    --var ARRAY_APP_KEY:11111111-2222-4333-8444-555555555555 \
+    --var ARRAY_SERVER_TOKEN:SUPERSECRETTOKEN123
   curl -s -X POST -H 'content-type: application/json' \
     -d '{"clientKey":"AAA","ttlInMinutes":60}' localhost:8788/api/array/usertoken
   # esperado: 502 kind:"blocked" (o proxy responde 403 para sandbox.array.io)
@@ -118,7 +118,7 @@ exercita mais o envelope de truncamento.
   - pedir um `ttlInMinutes` diferente **não** reaproveita o cache (`60` e `1440` são entradas
     distintas), e `ttlInMinutes: 1` não é cacheado;
   - desde o ciclo 6 o escopo inclui também um **hash do client token** (X-011): rotacionar
-    `SMARTY_AUTH_TOKEN` invalida o cache mesmo com o mesmo `appKey`, e o token em si nunca entra na
+    `ARRAY_SERVER_TOKEN` invalida o cache mesmo com o mesmo `appKey`, e o token em si nunca entra na
     chave (só o fingerprint de 32 bits);
   - a leitura **exige** o campo `scope` no valor (X-008): entrada gravada à mão sem `scope` é
     tratada como miss, então a defesa não depende de quem escreveu;
@@ -134,3 +134,48 @@ exercita mais o envelope de truncamento.
   - o worker de sandbox em `:8788` compartilha o KV local, mas **não** enxerga mais os tokens do
     mock: a mesma requisição volta `502 kind:"blocked"` em vez de `200 cached:true` (era o W-001).
     Repro em um comando: mint no `:8787`, mesma requisição no `:8788`.
+
+## Ciclo 13 — variáveis novas, polling e webhooks
+
+- **Nomes canônicos**: `ARRAY_APP_KEY` e `ARRAY_SERVER_TOKEN`. `ARRAY_CLIENT_TOKEN` é alias;
+  `SMARTY_AUTH_ID`/`SMARTY_AUTH_TOKEN` são **aliases deprecados** — quando usados, `GET /api/status`
+  traz `warnings[]` e o worker imprime o aviso no boot. Um `.env` só com os nomes novos deve produzir
+  `warnings: []`.
+- **`ARRAY_BASE_URL`**: cole `https://sandbox.array.io` (sem `/api`) e confira em
+  `GET /api/status` que `baseUrl` volta `https://sandbox.array.io/api` e
+  `baseUrlSource: "ARRAY_BASE_URL"`. Variações cobertas por teste: com/sem `/api`, com barra no fim,
+  host de produção (que também troca o CDN quando `ARRAY_ENV` não é explícito) e valor inválido
+  (cai no host do `ARRAY_ENV` com aviso).
+- **`ARRAY_AUTH_MODE=browser`** é uma trava, não convenção:
+  ```bash
+  cd worker && npx wrangler dev --local --port 8788 \
+    --var ARRAY_APP_KEY:11111111-2222-4333-8444-555555555555 \
+    --var ARRAY_SERVER_TOKEN:SUPERSECRETTOKEN123 --var ARRAY_AUTH_MODE:browser
+  curl -s -X POST -H 'content-type: application/json' \
+    -d '{"firstName":"A","lastName":"B","dob":"1980-01-01","ssn":"666000000",
+         "address":{"street":"1 ST","city":"AUSTIN","state":"TX","zip":"78701"}}' \
+    localhost:8788/api/array/user
+  # esperado: 409 kind:"auth_mode" — e NENHUMA requisição sai (o segredo não é anexado)
+  ```
+- **Polling do relatório (202/200/204)**: em modo mock, `POST /api/array/report` aceita
+  `simulate: "pending-then-ready" | "pending-then-failure"` (recurso DESTA POC, não da Array) e a
+  tela Credit Report tem o seletor equivalente. Esperado: `pending-then-ready` → 200 depois de dois
+  202; `pending-then-failure` → **502 `kind: report_failed`** imediato (não espera o timeout);
+  `ARRAY_POLL_TIMEOUT` estourado → **504 `kind: timeout`** citando a variável.
+- **Personas (`ARRAY_IDENTITY`)**: `GET /api/personas` lista as quatro personas conhecidas
+  (`banker-coldiron` verificada; as outras três com DOB/SSN/endereço marcados `// UNVERIFIED`) e a
+  ativa. Em `ARRAY_ENV=production` o SSN vem `null` e a persona é ignorada, com aviso.
+- **Webhooks**:
+  ```bash
+  cd worker && npx wrangler dev --local --port 8788 --var ARRAY_WEBHOOK_TOKEN:SEGREDO-DO-PATH
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8788/api/webhooks/array/errado   # 404
+  curl -s -X POST -H 'content-type: application/json' \
+    -d '{"eventType":"Customer ordered a report","clientKey":"CK","reportKey":"RK"}' \
+    localhost:8788/api/webhooks/array/SEGREDO-DO-PATH   # {"received":true,...}
+  curl -s localhost:8788/api/webhooks/events | head -c 400
+  ```
+  Sem `ARRAY_WEBHOOK_TOKEN` a rota responde **404** (não existe). O token é comparado em tempo
+  constante e **nunca** aparece no Inspector: a auditoria grava o path como
+  `/api/webhooks/array/***`. O botão "Simular evento" da tela grava `source: simulated` — a Array
+  não alcança o seu `localhost`, e não há API de registro: a `ARRAY_LISTENER_URL` é entregue ao
+  Customer Success.

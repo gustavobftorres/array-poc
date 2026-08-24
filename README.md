@@ -36,8 +36,8 @@ Se você abriu este repo agora, a ordem que economiza tempo é:
 
 | Diretório | O que tem |
 |---|---|
-| `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, 67 testes vitest |
-| `web/` | 8 telas React (Dashboard, Enrollment, KBA, Credit Report, Alerts, Guia de Integração, Web Components, API Inspector) |
+| `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, listener de webhook, 139 testes vitest |
+| `web/` | 9 telas React (Dashboard, Enrollment, KBA, Credit Report, Alerts, Guia de Integração, Webhooks, Web Components, API Inspector) |
 | `scripts/` | suítes de validação (HTTP, browser, snippets coláveis, envenenamento de KV, aritmética do relatório) |
 | `docs/` | pesquisa da API, plano, QA e os relatórios de validação por ciclo |
 
@@ -60,7 +60,8 @@ checagem de versão). Não são falhas: se `curl localhost:8787/api/health` resp
 está tudo certo.
 
 Abra <http://localhost:5173>. Comece pelo Dashboard → **Semear usuário demo**, ou percorra
-Enrollment → KBA → Credit Report → Alerts → **Guia de Integração** → Web Components → API Inspector.
+Enrollment → KBA → Credit Report → Alerts → **Guia de Integração** → **Webhooks** → Web Components
+→ API Inspector.
 
 ### Guia de Integração (`/integracao`) — comece por aqui se o objetivo é integrar
 
@@ -69,8 +70,9 @@ fato. Ela traz, num stepper com diagrama:
 
 - o encadeamento das **6 chamadas**: `POST /user/v2` → `GET`+`POST /authenticate/v2` →
   `POST /authenticate/v2/usertoken` → atributo `userToken` no web component →
-  `POST /report/v2` → `GET /report/v2` (com o retry de 3 s, porque o relatório não sai pronto) e
-  `PUT /report/v2` para renovar o `displayToken`;
+  `POST /report/v2` → `GET /report/v2` (com o **polling documentado**: `202` = ainda gerando,
+  `200` = pronto, `204` = falha permanente) e `PUT /report/v2` para renovar o `displayToken` — os
+  tokens valem **uma** recuperação;
 - a **fronteira servidor/browser** desenhada: o *client token* nunca cruza; o `appKey` (público) e o
   `userToken` (curta duração) são os únicos valores que vão ao browser;
 - por passo: o que **o seu backend** precisa implementar, o `curl` e o equivalente em **TypeScript**
@@ -97,7 +99,7 @@ carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usand
 Comandos úteis:
 
 ```bash
-npm --workspace worker run test        # vitest (67 testes)
+npm --workspace worker run test        # vitest (139 testes)
 npm --workspace web run build          # tsc -b + vite build
 npm --workspace worker run typecheck   # tsc --noEmit
 npm --workspace worker run dev         # só o worker
@@ -146,20 +148,46 @@ Conteúdo do `.env` (e, gerado a partir dele, do `worker/.dev.vars`) — **reini
 de mudar:
 
 ```ini
-SMARTY_AUTH_ID=<appKey da Array>        # UUID de 36 chars
-SMARTY_AUTH_TOKEN=<client token>        # segredo, fica só no worker
-ARRAY_ENV=sandbox                       # sandbox | production
+ARRAY_APP_KEY=<appKey da Array>          # UUID de 36 chars, público por design
+ARRAY_SERVER_TOKEN=<client token>        # SEGREDO: header x-credmo-client-token, só no worker
+ARRAY_ENV=sandbox                        # sandbox | production
+ARRAY_AUTH_MODE=server                   # server (default) | browser
+ARRAY_POLL_INTERVAL=1.0                  # segundos (unidade INFERIDA)
+ARRAY_POLL_TIMEOUT=120                   # segundos (unidade INFERIDA)
 ```
 
-Se **qualquer um dos dois** estiver vazio, a POC cai automaticamente em modo MOCK. O banner
-no topo do frontend sempre mostra o modo vigente (`GET /api/status`).
+Se **ARRAY_APP_KEY ou ARRAY_SERVER_TOKEN** estiver vazio, a POC cai automaticamente em modo MOCK.
+O banner no topo do frontend sempre mostra o modo vigente (`GET /api/status`).
+
+### O contrato completo das variáveis
+
+Significado, obrigatoriedade e nível de confiança de cada uma:
+[`docs/ARRAY_ENV_VARS.md`](docs/ARRAY_ENV_VARS.md).
+
+| Variável | Obrigatória | Default | O que faz |
+|---|---|---|---|
+| `ARRAY_APP_KEY` | **sim** | — | `appKey` da Array (UUID de 36 chars). Vai no **corpo** das chamadas e no HTML dos componentes: público por design. |
+| `ARRAY_SERVER_TOKEN` | **sim** | — | O segredo de servidor, enviado como header `x-credmo-client-token`. Nunca vai ao browser. |
+| `ARRAY_BASE_URL` | não | derivado de `ARRAY_ENV` | Host da API. Aceita **com ou sem** `/api` (`https://sandbox.array.io` funciona: a POC normaliza para `.../api`), com barra no fim e com host de produção. Sem `ARRAY_ENV` explícito, um host não-sandbox liga o ambiente de **produção** (e o CDN de produção). |
+| `ARRAY_ENV` | não | `sandbox` | `sandbox` \| `production`. Decide base URL (quando não há override) e o CDN dos componentes. |
+| `ARRAY_AUTH_MODE` | não | `server` | Trava explícita. `server`: as chamadas saem do worker com `x-credmo-client-token`. `browser`: usam `x-credmo-user-token` e o client token **nunca** é anexado — uma chamada sem `userToken` falha (HTTP 409, `kind: auth_mode`) em vez de vazar o segredo. |
+| `ARRAY_IDENTITY` | não | `banker-coldiron` | Persona de teste **do sandbox**: slug (`banker-coldiron`, `dalton-lot`, `denise-hennessy`, `donald-blair`) ou JSON inline. Pré-preenche o Enrollment e o `/api/seed`. **Ignorada em produção.** |
+| `ARRAY_PRODUCT_CODE` | não | `credmo3bReportScore` | `productCode` default de `POST /report/v2`. |
+| `ARRAY_POLL_INTERVAL` | não | `1.0` | Intervalo do polling de `GET /report/v2`, em **segundos** (unidade `// UNVERIFIED`). |
+| `ARRAY_POLL_TIMEOUT` | não | `120` | Timeout do polling, em **segundos** (unidade `// UNVERIFIED`). Se as re-tentativas de bureau descritas por fonte terceira valerem para a sua conta, considere `300`. |
+| `ARRAY_LISTENER_URL` | não | — | A URL do **seu** listener de webhook. **Não existe API de registro**: você entrega essa URL ao seu representante de Customer Success da Array. A POC só a exibe (em `/api/status` e na tela Webhooks) para você saber o que informar. |
+| `ARRAY_WEBHOOK_TOKEN` | não | — | Segredo **gerado por você** que vive no *path* do listener (`POST /api/webhooks/array/<token>`), comparado em tempo constante e nunca logado. Interpretação `// UNVERIFIED`: a Array **não** assina os webhooks nem manda headers customizados, então a URL secreta é a única autenticação possível. |
+
+Aliases: `ARRAY_CLIENT_TOKEN` é aceito como sinônimo de `ARRAY_SERVER_TOKEN` (é o mesmo segredo e o
+mesmo header). Os nomes `SMARTY_AUTH_ID` / `SMARTY_AUTH_TOKEN` continuam aceitos como **aliases
+deprecados**, com aviso no boot e em `GET /api/status` — veja a nota histórica no fim deste arquivo.
 
 ## Prontidão com credenciais reais (o que funciona em mock vs sandbox)
 
 Resumo do checklist de prontidão de `docs/VALIDATION_CICLO7.md`.
 
 **Vai funcionar de primeira, sem credencial nenhuma:** `npm install && npm run db:migrate &&
-npm run dev`; as 8 telas em modo mock com fixtures que fecham a própria aritmética; as suítes de
+npm run dev`; as 9 telas em modo mock com fixtures que fecham a própria aritmética; as suítes de
 validação verdes; o Guia de Integração inteiro (`curl` e TypeScript coláveis, executados contra uma
 Array falsa em `scripts/fake-array-ciclo7.mjs`); o Inspector com segredo e PII redigidos; o cache de
 `userToken` isolado por modo/appKey/baseUrl/client token.
@@ -185,38 +213,49 @@ KBA, `usertoken` e report passam a chamar `https://sandbox.array.io/api` pelos p
 Além dos paths, o Guia de Integração e o Playground marcam **por afirmação** o que é
 `verificado` e o que é `// UNVERIFIED` (por exemplo: `appKey` no corpo do `/report/v2`, `clientKey`
 na query do `GET /authenticate/v2`, o critério de "relatório ainda vazio" e o mapeamento
-401/403 = `displayToken` expirado — todos inferências desta POC).
+401/403 = `displayToken` expirado, e a unidade em segundos do `ARRAY_POLL_*` — todos inferências
+desta POC). O **critério de conclusão do relatório** deixou de ser inferência: é o `202`/`200`/`204`
+documentado pela Array.
 
 ## O que você precisa fazer manualmente
 
 1. **Liberar egress** para `array.io`, `sandbox.array.io` e `embed[.sandbox].array.io` (CDN dos web
    components). No ambiente onde a POC foi desenvolvida os três são bloqueados pelo proxy, por isso
    o passo 4 do Guia só foi exercitado com o CDN stubado e toda a validação funcional é em mock.
-2. **Pegar credenciais e identidades de sandbox no portal da Array**: `appKey` + client token para o
-   `.dev.vars`, e consumidores de teste — as fixtures usam SSN do bloco `666…`, que é o bloco certo
+2. **Pegar credenciais e identidades de sandbox no portal da Array**: `ARRAY_APP_KEY` +
+   `ARRAY_SERVER_TOKEN` para o `.env`, e consumidores de teste — as fixtures usam SSN do bloco `666…`, que é o bloco certo
    para teste, mas as identidades que o bureau de sandbox reconhece vêm de lá.
 3. **Conferir os paths inferidos** (tabela acima) contra o OpenAPI/Postman do portal (§7 da
    pesquisa) antes de levar Alerts/monitoring/scoretracker para qualquer coisa séria.
-4. Rodar a suíte depois de plugar as chaves: `docs/QA.md` §0–§2. O caminho canônico
+4. **Registrar o listener de webhook com o Customer Success da Array** — passo humano, não há API:
+   entregue a URL pública da rota `POST /api/webhooks/array/<ARRAY_WEBHOOK_TOKEN>` (uma para
+   sandbox, outra para produção). Sem isso a tela Webhooks só mostra eventos simulados localmente.
+5. **Confirmar quais `productCode` a sua conta tem habilitados** — o catálogo é por contrato; a POC
+   usa `credmo3bReportScore` como default (`ARRAY_PRODUCT_CODE`).
+6. Rodar a suíte depois de plugar as chaves: `docs/QA.md` §0–§2. O caminho canônico
    enrollment → KBA → usertoken → report é o que vale como aceite.
 
-## Nota honesta sobre os nomes SMARTY_*
+## Nota histórica: os nomes `SMARTY_*` estavam ERRADOS
 
-**A API da Array não usa credenciais Smarty.** Não existe header `Smarty-Auth-Id` /
-`Smarty-Auth-Token` em nenhum endpoint da Array — isso pertence à
-[Smarty](https://www.smarty.com/), fornecedora de validação de endereços, sem relação com a
-Array. Detalhes e fontes em [`docs/ARRAY_API_RESEARCH.md`](docs/ARRAY_API_RESEARCH.md) §2.
+Até o ciclo 12 esta POC chamava as credenciais de `SMARTY_AUTH_ID` / `SMARTY_AUTH_TOKEN`. Isso
+veio de uma **premissa equivocada**: a API da Array não usa credenciais Smarty. Não existe header
+`Smarty-Auth-Id` / `Smarty-Auth-Token` em endpoint nenhum da Array — isso pertence à
+[Smarty](https://www.smarty.com/), fornecedora de validação de endereços, sem relação com a Array
+(fontes em [`docs/ARRAY_API_RESEARCH.md`](docs/ARRAY_API_RESEARCH.md) §2).
 
-Como o pedido exigia esses nomes de variável, eles foram **mapeados** para as credenciais
-reais da Array:
+No ciclo 13 o contrato foi corrigido. Os nomes canônicos passam a ser os da tabela acima:
 
-| Variável do projeto | Credencial real da Array | Como é usada |
+| Nome antigo (deprecado) | Nome canônico | Credencial real da Array |
 |---|---|---|
-| `SMARTY_AUTH_ID` | `appKey` | UUID de 36 chars, **público por design** (vai no HTML dos componentes) |
-| `SMARTY_AUTH_TOKEN` | client token | header `x-credmo-client-token`, **segredo — nunca vai ao browser** |
+| `SMARTY_AUTH_ID` | `ARRAY_APP_KEY` | `appKey` — UUID de 36 chars, **público por design** |
+| `SMARTY_AUTH_TOKEN` | `ARRAY_SERVER_TOKEN` | client token — header `x-credmo-client-token`, **segredo** |
 
-Aliases com os nomes reais também funcionam e têm prioridade menor:
-`ARRAY_APP_KEY` e `ARRAY_CLIENT_TOKEN`.
+Os nomes antigos **continuam sendo aceitos**, com prioridade menor, para não quebrar um `.env` já
+preenchido: quando usados, o worker imprime um aviso no boot e o expõe em `warnings[]` no
+`GET /api/status` (o Dashboard e o banner mostram). Toda a documentação, os exemplos e os snippets
+do Guia usam apenas os nomes novos. `ARRAY_SERVER_TOKEN` e `ARRAY_CLIENT_TOKEN` são o **mesmo**
+segredo: a Array documenta apenas dois tokens de portador (client token, server-side; user token,
+por consumidor) — não existe um terceiro "server token".
 
 ## Rotas do worker
 
@@ -227,6 +266,11 @@ Aliases com os nomes reais também funcionam e têm prioridade menor:
 | `POST /api/array/user` | `POST /user/v2` (enrollment → `clientKey`) |
 | `GET /api/array/user` | `GET /user/v2` (resolve userId por `x-credmo-user-token`) |
 | `GET /api/array/users` | lista o D1 local — pagina (`?limit=` 1–200, default 50; `?limit=` vazio = default, não mínimo) e devolve `total` à parte |
+| `GET /api/personas` | — (personas de sandbox conhecidas + a ativa em `ARRAY_IDENTITY`) |
+| `POST /api/webhooks/array/:token` | — (**listener** local; segredo no path, comparado em tempo constante) |
+| `GET /api/webhooks/config` | — (o que informar ao Customer Success; nunca devolve o token) |
+| `GET`/`DELETE /api/webhooks/events` | — (eventos recebidos, no D1) |
+| `POST /api/webhooks/simulate` | — (simula um evento localmente: a Array não chama o seu `localhost`) |
 | `GET /api/array/authenticate` | `GET /authenticate/v2` (perguntas KBA + `authToken`) |
 | `POST /api/array/authenticate` | `POST /authenticate/v2` (respostas → `userToken`) |
 | `POST /api/array/usertoken` | `POST /authenticate/v2/usertoken` (token dos componentes) |

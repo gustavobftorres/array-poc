@@ -156,6 +156,26 @@ export interface MonitoringEnrollment {
   enrolledAt: string
 }
 
+/**
+ * Argumentos de leitura do relatório. `poll` carrega ARRAY_POLL_INTERVAL /
+ * ARRAY_POLL_TIMEOUT: o critério é o status HTTP (202/200/204), ver
+ * `array/poll.ts`.
+ */
+export interface GetReportArgs {
+  reportKey: string
+  displayToken: string
+  clientKey?: string
+  poll?: { intervalMs: number; timeoutMs: number }
+  /**
+   * Só no provider MOCK: força a simulação de 202 antes do desfecho, para
+   * exercitar o loop de polling sem a Array real.
+   */
+  simulate?: ReportSimulation
+}
+
+/** Simulações do mock: pronto na 1ª, 202→200 ou 202→204. */
+export type ReportSimulation = 'ready' | 'pending-then-ready' | 'pending-then-failure'
+
 /** Provider interface implemented by both `client.ts` and `mock.ts`. */
 export interface ArrayProvider {
   readonly mode: 'mock' | 'sandbox'
@@ -169,7 +189,7 @@ export interface ArrayProvider {
   }): Promise<AnswerKbaResult>
   createUserToken(args: { clientKey: string; ttlInMinutes: number }): Promise<UserTokenResult>
   orderReport(args: { clientKey: string; productCode: string }): Promise<OrderReportResult>
-  getReport(args: { reportKey: string; displayToken: string; clientKey?: string }): Promise<CreditReport>
+  getReport(args: GetReportArgs): Promise<CreditReport>
   refreshDisplayToken(args: { clientKey: string; reportKey: string }): Promise<{ reportKey: string; displayToken: string }>
   getAlerts(args: { clientKey: string; bureau?: string }): Promise<{ alerts: Alert[] }>
   getAlertDetails(args: { alertId: string; clientKey?: string }): Promise<Alert>
@@ -187,7 +207,11 @@ export class ArrayApiError extends Error {
       | 'timeout'
       | 'network'
       | 'blocked'
-      | 'validation' = 'http',
+      | 'validation'
+      /** HTTP 204 no GET /report/v2 — falha PERMANENTE de geração. */
+      | 'report_failed'
+      /** Trava do ARRAY_AUTH_MODE: a chamada exigiria o header proibido. */
+      | 'auth_mode' = 'http',
   ) {
     super(message)
     this.name = 'ArrayApiError'

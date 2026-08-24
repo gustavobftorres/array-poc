@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, type Persona } from '../lib/api'
 import { useSession } from '../lib/session'
 import { Card, ErrorBox, Field, Json, TokenChip, useAsync } from '../components/ui'
 
-/** Sandbox identity from docs/ARRAY_API_RESEARCH.md §5. */
+/**
+ * Identidade de teste de fallback (§5) — usada só se `GET /api/personas` não
+ * responder. O caminho normal é o pré-preenchimento vir da persona ativa
+ * (`ARRAY_IDENTITY`), que o worker resolve.
+ */
 const DEMO = {
   firstName: 'BANKER',
   lastName: 'COLDIRON',
@@ -14,6 +18,21 @@ const DEMO = {
   city: 'GRAND PRAIRIE',
   state: 'TX',
   zip: '75052',
+}
+
+/** Persona (`ARRAY_IDENTITY`) -> campos do formulário. */
+function personaToForm(p: Persona): Form {
+  return {
+    firstName: p.firstName,
+    lastName: p.lastName,
+    dob: p.dob,
+    // Em produção o worker não devolve o SSN da persona (elas não existem lá).
+    ssn: p.ssn ?? '',
+    street: p.address.street,
+    city: p.address.city,
+    state: p.address.state,
+    zip: p.address.zip,
+  }
 }
 
 const EMPTY = { firstName: '', lastName: '', dob: '', ssn: '', street: '', city: '', state: '', zip: '' }
@@ -62,12 +81,40 @@ function validate(f: Form): Partial<Record<keyof Form, string>> {
 
 export function Enrollment() {
   const [form, setForm] = useState<Form>(EMPTY)
+  const [personas, setPersonas] = useState<Persona[]>([])
+  const [active, setActive] = useState<(Persona & { source: string }) | null>(null)
+  const [chosen, setChosen] = useState('')
   const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({})
   const { patch, status } = useSession()
   const nav = useNavigate()
   const req = useAsync<{ clientKey: string; appKey: string }>()
 
   const set = (k: keyof Form) => (v: string) => setForm((f) => ({ ...f, [k]: v }))
+
+  // Personas de SANDBOX publicadas pela Array. A ativa vem de ARRAY_IDENTITY.
+  useEffect(() => {
+    let alive = true
+    api
+      .personas()
+      .then((r) => {
+        if (!alive) return
+        setPersonas(r.personas)
+        setActive(r.active)
+        setChosen(r.active.slug ?? '')
+      })
+      .catch(() => {
+        /* sem a rota, o botão cai na identidade de fallback */
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const fill = () => {
+    const p = personas.find((x) => x.slug === chosen) ?? active
+    setForm(p ? personaToForm(p as Persona) : DEMO)
+    setErrors({})
+  }
 
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault()
@@ -105,8 +152,30 @@ export function Enrollment() {
             <code>clientKey</code>, identificador usado por todas as chamadas seguintes.
             {status?.mode === 'mock' && ' Em modo mock nada sai pela rede — essa base é só a que seria usada.'}
           </p>
+          <p className="hint">
+            As personas acima <strong>só existem em sandbox</strong> (<code>ARRAY_IDENTITY</code> é ignorada em
+            produção). Elas são fictícias, mas <strong>não são canned</strong>: autenticar uma delas puxa perguntas de
+            KBA reais de um bureau real. Fora de <code>BANKER COLDIRON</code>, o pareamento DOB/SSN/endereço é{' '}
+            <span className="badge warn">// UNVERIFIED</span> — placeholder desta POC, troque pelos valores da sua conta.
+            {active && active.source === 'json' && ' A identidade ativa veio de um JSON inline em ARRAY_IDENTITY.'}
+          </p>
         </div>
-        <button className="ghost" onClick={() => setForm(DEMO)}>Preencher identidade de teste</button>
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          {personas.length > 0 && (
+            <div style={{ flex: '1 1 240px' }}>
+              <label htmlFor="persona-select">Persona de sandbox (ARRAY_IDENTITY)</label>
+              <select id="persona-select" value={chosen} onChange={(e) => setChosen(e.target.value)}>
+                {personas.map((p) => (
+                  <option key={p.slug} value={p.slug}>
+                    {p.label}
+                    {p.slug === active?.slug ? ' (ativa)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <button className="ghost" onClick={fill}>Preencher identidade de teste</button>
+        </div>
       </div>
 
       <div className="grid cols-2">

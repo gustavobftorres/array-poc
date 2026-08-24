@@ -9,6 +9,7 @@ import { Alerts } from './pages/Alerts'
 import { Playground } from './pages/Playground'
 import { IntegrationGuide } from './pages/Integration'
 import { Inspector } from './pages/Inspector'
+import { WebhooksPage } from './pages/Webhooks'
 
 export function App() {
   return (
@@ -24,6 +25,7 @@ export function App() {
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/integracao" element={<IntegrationGuide />} />
             <Route path="/playground" element={<Playground />} />
+            <Route path="/webhooks" element={<WebhooksPage />} />
             <Route path="/inspector" element={<Inspector />} />
             <Route path="*" element={<div className="card">Rota não encontrada.</div>} />
           </Route>

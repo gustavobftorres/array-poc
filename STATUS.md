@@ -16,7 +16,7 @@ POC local completa para avaliar a integração da Array (API + web components):
   3 tentativas com backoff, `blocked -> 502` e `timeout -> 504`.
 - **Modo mock determinístico** — a POC é 100% explorável sem credenciais; as fixtures
   derivam do clientKey e a aritmética do relatório fecha em todas as dobras.
-- **Frontend React+Vite — 8 telas:** Dashboard, Enrollment, KBA, Credit Report,
+- **Frontend React+Vite — 9 telas:** Dashboard, Enrollment, KBA, Credit Report, Webhooks,
   Alerts, **Guia de Integração**, Web Components Playground e API Inspector.
 - **Segurança** — client token nunca sai do worker; `users` guarda apenas
   `ssn_last4`; `api_calls` redige SSN, tokens e PII de identidade preservando a
@@ -41,13 +41,13 @@ npm run dev                        # worker :8787 + web :5173  (modo MOCK)
 
 **Para usar a API real da Array:**
 ```bash
-cp .env.example .env               # preencha SMARTY_AUTH_ID e SMARTY_AUTH_TOKEN
+cp .env.example .env               # preencha ARRAY_APP_KEY e ARRAY_SERVER_TOKEN
 npm run dev                        # o hook predev gera worker/.dev.vars a partir do .env
 ```
 
 Suíte de QA completa: ver `docs/QA.md` (pré-requisitos, comandos e saída esperada).
 
-## 3. Ciclos executados (12)
+## 3. Ciclos executados (13)
 
 | # | Entrega | Commit |
 |---|---|---|
@@ -57,9 +57,10 @@ Suíte de QA completa: ver `docs/QA.md` (pré-requisitos, comandos e saída espe
 | 5–6 | Cache isolado por modo + Guia de Integração | `2a091ea`, `dc54ba3` |
 | 7–8 | Guia com artefatos coláveis e fluxo do relatório | `5125690`, `32821a4` |
 | 9–10 | Acabamento de credibilidade + README auditado em clone limpo | `2960f7d`, `bc81fd5` |
-| 11–12 | PII redigida, `.env` com uso real, backlog zerado | `81267b1`, este |
+| 11–12 | PII redigida, `.env` com uso real, backlog zerado | `81267b1`, `c83f61a` |
+| 13 | Contrato de variáveis corrigido (`ARRAY_*`, `SMARTY_*` deprecado), `ARRAY_BASE_URL` normalizada, trava do `ARRAY_AUTH_MODE`, polling 202/200/204 com `ARRAY_POLL_*`, personas de `ARRAY_IDENTITY` e **listener de webhook** com tela nova | este |
 
-Suítes ao final: **67 testes**, smoke-api **42/42**, e2e/snippet-check/guide-check/
+Suítes ao final: **139 testes**, smoke-api **42/42**, e2e/snippet-check/guide-check/
 kv-poison/report-audit/hostile-attrname/regression × 3 — **todos em 0 achados**.
 
 ## 4. O limite estrutural (leia antes de amanhã)

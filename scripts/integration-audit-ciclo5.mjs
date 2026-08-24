@@ -110,7 +110,7 @@ serverCurls.forEach((c, i) => {
     note('P1', `passo ${n}: o comentário "# SEGREDO…" está DENTRO do valor do header -H, então o curl envia um header inválido (não é colável)`)
   }
   if (/-H '[^']*\$[A-Z_]+/.test(c)) {
-    note('P2', `passo ${n}: variável de ambiente dentro de aspas SIMPLES no curl — o shell não expande ($ARRAY_CLIENT_TOKEN vai literal)`)
+    note('P2', `passo ${n}: variável de ambiente dentro de aspas SIMPLES no curl — o shell não expande ($ARRAY_SERVER_TOKEN vai literal)`)
   }
 })
 // appKey no body (docs §3.1, §3.3, §3.4)

@@ -137,7 +137,9 @@ for (const s of snippets) {
     .replace(/sleep 3/g, 'sleep 0')
   const header = [
     'set -u',
-    `export ARRAY_CLIENT_TOKEN='LOCAL-DEV-TOKEN'`,
+    `export ARRAY_SERVER_TOKEN='LOCAL-DEV-TOKEN'`,
+    `export ARRAY_POLL_INTERVAL='0'`,
+    `export ARRAY_POLL_TIMEOUT='10'`,
     `export ARRAY_APP_KEY='MOCK0000-0000-4000-8000-MOCKAPPKEY00'`,
     `export CLIENT_KEY='${CLIENT_KEY}'`,
     `export AUTH_TOKEN='${AUTH_TOKEN}'`,

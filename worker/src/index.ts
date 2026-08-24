@@ -1,13 +1,15 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { z } from 'zod'
-import { getConfig, publicStatus } from './config'
+import { getConfig, logBootWarnings, publicStatus } from './config'
 import type { Env } from './types'
 import { ArrayClient } from './array/client'
 import { MockArrayProvider } from './array/mock'
-import { ArrayApiError, type ArrayProvider } from './array/types'
+import { ArrayApiError, type ArrayProvider, type ReportSimulation } from './array/types'
 import * as db from './db'
 import { redact } from './redact'
+import { PERSONAS } from './personas'
+import { maskWebhookPath, normalizeWebhookEvent, webhookTokenMatches } from './webhook'
 
 type Vars = { requestBody?: unknown }
 const app = new Hono<{ Bindings: Env; Variables: Vars }>()
@@ -49,7 +51,23 @@ async function hydrateMock(env: Env | undefined): Promise<void> {
 function provider(env: Env | undefined): ArrayProvider {
   const cfg = getConfig(env)
   if (cfg.mode === 'mock') return mockProvider
-  return new ArrayClient({ baseUrl: cfg.baseUrl, appKey: cfg.appKey, clientToken: cfg.clientToken })
+  return new ArrayClient({
+    baseUrl: cfg.baseUrl,
+    appKey: cfg.appKey,
+    clientToken: cfg.serverToken,
+    // Trava explícita: em `browser` o client token nunca é anexado.
+    authMode: cfg.authMode,
+    pollIntervalMs: cfg.pollIntervalMs,
+    pollTimeoutMs: cfg.pollTimeoutMs,
+  })
+}
+
+/** Avisos de configuração (nomes deprecados etc.) — uma vez por isolate. */
+let warnedBoot = false
+function warnOnce(env: Env | undefined): void {
+  if (warnedBoot) return
+  warnedBoot = true
+  logBootWarnings(getConfig(env))
 }
 
 // ---------------------------------------------------------------------------
@@ -62,10 +80,11 @@ function provider(env: Env | undefined): ArrayProvider {
  * frontend noise (V-008).
  */
 const AUDIT_SKIP =
-  /^\/api\/(inspector|health|status|array\/users|array\/reports|array\/usertoken\/latest)$/
+  /^\/api\/(inspector|health|status|personas|webhooks\/(config|events)|array\/users|array\/reports|array\/usertoken\/latest)$/
 
 app.use('/api/*', async (c, next) => {
   const started = Date.now()
+  warnOnce(c.env)
   await hydrateMock(c.env)
   let requestBody: unknown = undefined
   if (c.req.method !== 'GET' && c.req.method !== 'DELETE') {
@@ -82,7 +101,9 @@ app.use('/api/*', async (c, next) => {
 
   await next()
 
-  const path = new URL(c.req.url).pathname
+  // O token do webhook vive no PATH: ele é mascarado ANTES de qualquer
+  // gravação — nem a auditoria pode guardar o segredo.
+  const path = maskWebhookPath(new URL(c.req.url).pathname)
   if (AUDIT_SKIP.test(path)) return
 
   const duration = Date.now() - started
@@ -176,13 +197,21 @@ const userTokenSchema = z.object({
 
 const orderReportSchema = z.object({
   clientKey: z.string().min(1),
-  productCode: z.string().min(1).default('credmo3bReportScore'),
+  /** Default vem de ARRAY_PRODUCT_CODE (que já tem default `credmo3bReportScore`). */
+  productCode: z.string().min(1).optional(),
+  /**
+   * Recurso DESTA POC (não da Array): programa o mock para simular o ciclo de
+   * geração — 202 antes de 200, ou 202 antes de 204 (falha permanente).
+   */
+  simulate: z.enum(['ready', 'pending-then-ready', 'pending-then-failure']).optional(),
 })
 
 const getReportSchema = z.object({
   reportKey: z.string().min(1),
   displayToken: z.string().min(1),
   clientKey: z.string().optional(),
+  /** Mock only — mesma simulação do POST, para exercitar o polling. */
+  simulate: z.enum(['ready', 'pending-then-ready', 'pending-then-failure']).optional(),
 })
 
 const refreshTokenSchema = z.object({ clientKey: z.string().min(1), reportKey: z.string().min(1) })
@@ -213,12 +242,26 @@ function errorResponse(e: unknown) {
       e.kind === 'blocked'
         ? 'O host array.io está bloqueado pelo proxy de egresso deste ambiente. Rode em modo mock (esvazie as credenciais) para explorar a POC.'
         : e.kind === 'timeout'
-          ? 'A Array não respondeu no tempo limite. Tente novamente.'
-          : undefined
+          ? 'A Array não respondeu no tempo limite (ou o relatório continuou em 202 além do ARRAY_POLL_TIMEOUT).'
+          : e.kind === 'report_failed'
+            ? 'HTTP 204 no GET /report/v2 = falha PERMANENTE de geração (documentado). Não repita o polling: peça outro relatório com POST /report/v2.'
+            : e.kind === 'auth_mode'
+              ? 'ARRAY_AUTH_MODE=browser: só x-credmo-user-token é aceito. Emita um userToken ou volte para ARRAY_AUTH_MODE=server.'
+              : undefined
     // A blocked egress or a timeout is an upstream condition, not a client
     // error — reporting 403/408 would paint infrastructure as "the caller's fault".
     const status =
-      e.kind === 'blocked' ? 502 : e.kind === 'timeout' ? 504 : e.status >= 400 && e.status < 600 ? e.status : 502
+      e.kind === 'blocked'
+        ? 502
+        : e.kind === 'timeout'
+          ? 504
+          : e.kind === 'report_failed'
+            ? 502
+            : e.kind === 'auth_mode'
+              ? 409
+              : e.status >= 400 && e.status < 600
+                ? e.status
+                : 502
     return {
       status,
       payload: { message: e.message, kind: e.kind, hint, upstream: redact(e.body) },
@@ -486,10 +529,17 @@ app.get('/api/array/usertoken/latest', async (c) => {
 app.post('/api/array/report', async (c) => {
   const v = parse(orderReportSchema, body(c), 'body')
   if (!v.ok) return c.json(v.response, 400)
+  const cfg = getConfig(c.env)
   try {
-    const res = await provider(c.env).orderReport(v.data)
+    const res = await provider(c.env).orderReport({
+      clientKey: v.data.clientKey,
+      productCode: v.data.productCode ?? cfg.productCode,
+    })
     if (c.env?.DB) await db.insertReport(c.env.DB, res)
-    return c.json(res)
+    // A simulação de 202/204 só existe no mock — na Array real quem decide o
+    // status é ela.
+    if (cfg.mode === 'mock') mockProvider.planSimulation(res.reportKey, v.data.simulate as ReportSimulation | undefined)
+    return c.json({ ...res, simulate: cfg.mode === 'mock' ? (v.data.simulate ?? 'ready') : undefined })
   } catch (e) {
     const { status, payload } = errorResponse(e)
     return c.json(payload, status as 400)
@@ -499,12 +549,23 @@ app.post('/api/array/report', async (c) => {
 app.get('/api/array/report', async (c) => {
   const v = parse(
     getReportSchema,
-    { reportKey: c.req.query('reportKey'), displayToken: c.req.query('displayToken'), clientKey: c.req.query('clientKey') },
+    {
+      reportKey: c.req.query('reportKey'),
+      displayToken: c.req.query('displayToken'),
+      clientKey: c.req.query('clientKey'),
+      simulate: c.req.query('simulate') || undefined,
+    },
     'query',
   )
   if (!v.ok) return c.json(v.response, 400)
+  const cfg = getConfig(c.env)
   try {
-    const report = await provider(c.env).getReport(v.data)
+    // Polling pelo critério DOCUMENTADO (202 repete / 200 pronto / 204 falha
+    // permanente), com intervalo e timeout de ARRAY_POLL_* — ver array/poll.ts.
+    const report = await provider(c.env).getReport({
+      ...v.data,
+      poll: { intervalMs: cfg.pollIntervalMs, timeoutMs: cfg.pollTimeoutMs },
+    })
     if (c.env?.DB) await db.saveReportPayload(c.env.DB, v.data.reportKey, report)
     return c.json(report)
   } catch (e) {
@@ -518,6 +579,14 @@ app.get('/api/array/reports', async (c) => {
   return c.json({ reports })
 })
 
+/**
+ * PUT /report/v2 — renova o displayToken.
+ *
+ * VERIFICADO: "The tokens are good for one retrieval, only." O par
+ * reportKey+displayToken sobrevive aos 202 sucessivos, mas depois do 200 é
+ * queimado; para RELER o mesmo relatório é este PUT que devolve um token novo,
+ * sem pedir (nem pagar) outro relatório.
+ */
 app.put('/api/array/report', async (c) => {
   const v = parse(refreshTokenSchema, body(c), 'body')
   if (!v.ok) return c.json(v.response, 400)
@@ -583,7 +652,11 @@ app.get('/api/array/monitoring', async (c) => {
 // Seed + inspector
 // ---------------------------------------------------------------------------
 
-/** Sandbox identity from docs/ARRAY_API_RESEARCH.md §5. */
+/**
+ * Persona de sandbox usada pelo seed e como pré-preenchimento do Enrollment.
+ * Vem de ARRAY_IDENTITY (slug de persona conhecida ou JSON inline) e cai na
+ * persona default BANKER COLDIRON (§5). Personas só existem em SANDBOX.
+ */
 export const DEMO_USER = {
   firstName: 'BANKER',
   lastName: 'COLDIRON',
@@ -592,12 +665,62 @@ export const DEMO_USER = {
   address: { street: '3627 CALIFORNIA ST', city: 'GRAND PRAIRIE', state: 'TX', zip: '75052' },
 }
 
+/** Personas conhecidas do sandbox + a identidade ativa (ARRAY_IDENTITY). */
+app.get('/api/personas', (c) => {
+  const cfg = getConfig(c.env)
+  // O SSN COMPLETO destas personas só sai em SANDBOX, e só porque elas são
+  // identidades fictícias de teste publicadas pela Array (faixa 666…, bloco
+  // inválido da SSA) — é o que a tela de Enrollment pré-preenche. Em produção
+  // nada disso existe e o campo vem nulo.
+  const sandbox = cfg.arrayEnv === 'sandbox'
+  const ssnField = (ssn: string) => (sandbox ? ssn : null)
+  return c.json({
+    personas: PERSONAS.map((p) => ({
+      slug: p.slug,
+      label: p.label,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      dob: p.dob,
+      ssn: ssnField(p.ssn),
+      ssnLast4: p.ssn.slice(-4),
+      address: p.address,
+      confidence: p.confidence,
+      note: p.note,
+    })),
+    active: {
+      slug: cfg.identity.slug ?? null,
+      label: cfg.identity.label,
+      source: cfg.identity.source,
+      confidence: cfg.identity.confidence,
+      note: cfg.identity.note,
+      firstName: cfg.identity.firstName,
+      lastName: cfg.identity.lastName,
+      dob: cfg.identity.dob,
+      ssn: ssnField(cfg.identity.ssn),
+      ssnLast4: cfg.identity.ssn.slice(-4),
+      address: cfg.identity.address,
+    },
+    sandboxOnly: true,
+    arrayEnv: cfg.arrayEnv,
+    /** Identidades de sandbox NÃO são canned: puxam KBA de bureau real. */
+    warning:
+      'As identidades de sandbox são fictícias mas não são canned: autenticar uma delas puxa perguntas de KBA reais de um bureau real. Em produção elas não existem.',
+  })
+})
+
 app.post('/api/seed', async (c) => {
   const p = provider(c.env)
   const cfg = getConfig(c.env)
+  const identity = {
+    firstName: cfg.identity.firstName,
+    lastName: cfg.identity.lastName,
+    dob: cfg.identity.dob,
+    ssn: cfg.identity.ssn,
+    address: cfg.identity.address,
+  }
   try {
-    const user = await p.createUser(DEMO_USER)
-    if (c.env?.DB) await db.insertUser(c.env.DB, { ...DEMO_USER, clientKey: user.clientKey, mode: cfg.mode })
+    const user = await p.createUser(identity)
+    if (c.env?.DB) await db.insertUser(c.env.DB, { ...identity, clientKey: user.clientKey, mode: cfg.mode })
 
     const token = await p.createUserToken({ clientKey: user.clientKey, ttlInMinutes: 60 })
     if (c.env?.DB) {
@@ -609,10 +732,13 @@ app.post('/api/seed', async (c) => {
       })
     }
 
-    const order = await p.orderReport({ clientKey: user.clientKey, productCode: 'credmo3bReportScore' })
+    const order = await p.orderReport({ clientKey: user.clientKey, productCode: cfg.productCode })
     if (c.env?.DB) await db.insertReport(c.env.DB, order)
 
-    const report = await p.getReport({ ...order })
+    const report = await p.getReport({
+      ...order,
+      poll: { intervalMs: cfg.pollIntervalMs, timeoutMs: cfg.pollTimeoutMs },
+    })
     if (c.env?.DB) await db.saveReportPayload(c.env.DB, order.reportKey, report)
 
     const alerts = await p.getAlerts({ clientKey: user.clientKey })
@@ -627,7 +753,14 @@ app.post('/api/seed', async (c) => {
       displayToken: order.displayToken,
       score: (report as { score?: number }).score ?? null,
       alerts: alerts.alerts.length,
-      demoUser: { ...DEMO_USER, ssn: `***-**-${DEMO_USER.ssn.slice(-4)}` },
+      productCode: cfg.productCode,
+      identity: {
+        slug: cfg.identity.slug ?? null,
+        label: cfg.identity.label,
+        source: cfg.identity.source,
+        confidence: cfg.identity.confidence,
+      },
+      demoUser: { ...identity, ssn: `***-**-${identity.ssn.slice(-4)}` },
     })
   } catch (e) {
     const { status, payload } = errorResponse(e)
@@ -671,7 +804,98 @@ app.delete('/api/inspector', async (c) => {
   return c.json({ cleared: true })
 })
 
-app.notFound((c) => c.json({ message: 'Not Found', path: new URL(c.req.url).pathname }, 404))
+// ---------------------------------------------------------------------------
+// Webhooks / listener (ciclo 13)
+//
+// VERIFICADO (docs.array.com/docs/how-to-receive-webhooks):
+//  - a Array faz POST JSON, SEM query params e SEM headers customizados;
+//  - logo: sem assinatura, sem HMAC, sem segredo emitido por ela;
+//  - o listener deve responder 200 rápido;
+//  - **não existe API de registro**: você entrega a ARRAY_LISTENER_URL ao seu
+//    representante de Customer Success (registro manual, humano).
+// // UNVERIFIED (desta POC): o ARRAY_WEBHOOK_TOKEN é um segredo GERADO POR VOCÊ
+// que vive no PATH da URL — é a única autenticação possível sem assinatura.
+// ---------------------------------------------------------------------------
+
+/** O que a POC informa ao usuário para ele registrar com o CS da Array. */
+app.get('/api/webhooks/config', (c) => {
+  const cfg = getConfig(c.env)
+  return c.json({
+    listenerUrl: cfg.listenerUrl || null,
+    configured: cfg.webhookToken.length > 0,
+    /** O segredo NUNCA é devolvido — só o formato do path. */
+    localPath: '/api/webhooks/array/<ARRAY_WEBHOOK_TOKEN>',
+    registrationIsManual: true,
+    registrationNote:
+      'Não existe API de registro de webhook na Array: a URL completa do listener é entregue ao seu representante de Customer Success (recomendado: um listener para sandbox e outro para produção).',
+    secretInPathInferred: true,
+    signatureFromArray: false,
+  })
+})
+
+/** Eventos recebidos (inclui os simulados localmente). */
+app.get('/api/webhooks/events', async (c) => {
+  const limit = intParam(c.req.query('limit'), 50, 1, 200)
+  if (!c.env?.DB) return c.json({ events: [], total: 0, limit })
+  const { rows, total } = await db.listWebhookEvents(c.env.DB, limit)
+  return c.json({
+    events: rows.map((r) => ({ ...r, payload: safeJson(r.payload) })),
+    total,
+    limit,
+  })
+})
+
+app.delete('/api/webhooks/events', async (c) => {
+  if (c.env?.DB) await db.clearWebhookEvents(c.env.DB)
+  return c.json({ cleared: true })
+})
+
+/**
+ * Simulação LOCAL de um evento — a Array não vai chamar o seu localhost.
+ * Grava com `source: 'simulated'` para nunca se passar por evento real.
+ */
+app.post('/api/webhooks/simulate', async (c) => {
+  const raw = body(c)
+  const payload =
+    raw && typeof raw === 'object' && Object.keys(raw as object).length > 0
+      ? raw
+      : {
+          eventType: 'Customer ordered a report',
+          clientKey: 'SIMULADO-CLIENT-KEY',
+          reportKey: 'SIMULADO-REPORT-KEY',
+          productCode: getConfig(c.env).productCode,
+          note: 'Envelope INFERIDO: /docs/webhook-events é gated. Só os campos citados pela doc aparecem aqui.',
+        }
+  const event = normalizeWebhookEvent(payload)
+  const id = c.env?.DB
+    ? await db.insertWebhookEvent(c.env.DB, { ...event, source: 'simulated' })
+    : null
+  return c.json({ received: true, simulated: true, id, eventType: event.eventType })
+})
+
+/**
+ * O listener propriamente dito. O segredo está no PATH; a comparação é em
+ * TEMPO CONSTANTE e o token nunca é logado, gravado nem devolvido.
+ */
+app.post('/api/webhooks/array/:token', async (c) => {
+  const cfg = getConfig(c.env)
+  // Sem token configurado a rota não existe: nada a comparar, nada a revelar.
+  if (!cfg.webhookToken) {
+    return c.json({ message: 'Not Found', hint: 'defina ARRAY_WEBHOOK_TOKEN para habilitar o listener' }, 404)
+  }
+  if (!webhookTokenMatches(cfg.webhookToken, c.req.param('token'))) {
+    // Mensagem genérica de propósito: nem confirma o formato do segredo.
+    return c.json({ message: 'Not Found' }, 404)
+  }
+  const event = normalizeWebhookEvent(body(c))
+  const id = c.env?.DB ? await db.insertWebhookEvent(c.env.DB, { ...event, source: 'array' }) : null
+  // A doc pede 200 rápido para confirmar o recebimento. O payload é tratado
+  // como notificação NÃO confiável: nada aqui vira verdade sem reconfirmar
+  // pela API.
+  return c.json({ received: true, id, eventType: event.eventType })
+})
+
+app.notFound((c) => c.json({ message: 'Not Found', path: maskWebhookPath(new URL(c.req.url).pathname) }, 404))
 
 app.onError((err, c) => {
   const { status, payload } = errorResponse(err)
