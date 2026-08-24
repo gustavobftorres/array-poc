@@ -1,76 +1,99 @@
-# STATUS — POC Array (checkpoint de sessão)
+# STATUS — POC Array (entrega da sessão)
 
-**Última atualização:** 2026-08-23 20:20 BRT
-**Branch:** `claude/array-api-poc-cloudflare-bq7r2u`
-**Motivo do checkpoint:** limite de uso de IA da sessão atingido (reseta 22:40 UTC / 19:40 BRT).
+**Última atualização:** 2026-08-24 00:25 BRT
+**Branch:** `claude/array-api-poc-cloudflare-bq7r2u` · **último commit:** ver `git log -1`
+**Estado:** entregável. Backlog de defeitos zerado (0 P0 / 0 P1 / 0 P2 / 0 P3).
 
-## 1. Onde parou
+## 1. O que foi entregue
 
-6 ciclos fix-and-validate concluídos (DEV alterna com VALIDATE adversarial):
+POC local completa para avaliar a integração da Array (API + web components):
 
-| Ciclo | Entrega | Commit |
-|---|---|---|
-| 0 | Scaffold do monorepo + plano | `98c7a50` |
-| 0 | Pesquisa da API da Array | `e5e476d` |
-| 1 | POC completa em modo mock (backend + 7 telas) | `76b3751` |
-| 2 | Validação com navegador: 1 P0 + 7 P1 + 12 P2 | `1c8392b` |
-| 3 | Correções: snippet colável, Inspector à prova de payload, fixtures coerentes | `3aed292` |
-| 4 | Regressão: 17/20 corrigidos, 4 P1 novos | `df86dd1` |
-| 5 | Cache isolado por modo + tela Guia de Integração | `2a091ea` |
-| 6 | Regressão: **18/18 corrigidos, 0 regressões**, 13 defeitos novos | este commit |
+- **Backend** — Hono.js em Cloudflare Workers (`wrangler dev --local`), D1 para
+  persistência e auditoria, KV para cache de user token isolado por
+  modo/appKey/baseUrl/TTL/fingerprint do client token.
+- **Cliente da API Array** — `user/v2`, `authenticate/v2`, `authenticate/v2/usertoken`,
+  `report/v2` (POST/GET/PUT), scoretracker, alerts, monitoring. Timeout 12 s,
+  3 tentativas com backoff, `blocked -> 502` e `timeout -> 504`.
+- **Modo mock determinístico** — a POC é 100% explorável sem credenciais; as fixtures
+  derivam do clientKey e a aritmética do relatório fecha em todas as dobras.
+- **Frontend React+Vite — 8 telas:** Dashboard, Enrollment, KBA, Credit Report,
+  Alerts, **Guia de Integração**, Web Components Playground e API Inspector.
+- **Segurança** — client token nunca sai do worker; `users` guarda apenas
+  `ssn_last4`; `api_calls` redige SSN, tokens e PII de identidade preservando a
+  forma (`"firstName":"[REDACTED]:8 chars"`, `"dob":"[REDACTED]:1988"`).
 
-**Estado atual da POC:** roda 100% local, todas as suítes verdes —
-58 testes vitest, smoke-api 40/40, e2e sem achados (8 telas, mobile 8/8),
-snippet-check 20/20 na fase hostil, typecheck e build limpos.
+**Duas peças centrais para o objetivo declarado:**
+1. **Guia de Integração** (`/integracao`) — o encadeamento das 6 chamadas com a
+   fronteira SERVIDOR × BROWSER, o que o seu backend implementa em cada passo,
+   snippets em `curl` e TypeScript **testados executando**, o estado real da
+   sessão por passo e selo verificado / `// UNVERIFIED` por afirmação.
+2. **Playground** — os 11 componentes com atributos editáveis ao vivo e snippet
+   colável (validado abrindo num HTML em branco no Chromium).
 
-**Veredito do QA:** *"Sim, dá para entregar como POC de avaliação."* A fronteira do
-segredo está implementada (client token só no worker, apenas `ssn_last4` no D1,
-Inspector redigido), os caminhos de erro são reais e a POC é honesta sobre o que é
-inferência. O gargalo que sobra é o **conteúdo prescritivo do Guia de Integração**
-(X-001/X-002/X-003): é o artefato que sai da POC para o código do usuário, e hoje
-o `curl` não é colável e o body omite `appKey`.
-
-## 2. O que falta (Top 5 do ciclo 7, em `docs/VALIDATION_CICLO5.md`)
-
-1. **X-002 + X-001** — `appKey` no body dos 3 passos do Guia e retirar o comentário
-   `# SEGREDO` de dentro do valor do header no `curl` (hoje o comando não cola).
-2. **X-003** — fechar o fluxo no Guia: `POST /report/v2` → `GET /report/v2` com retry.
-3. **X-004 + X-005** — as 2 contradições que sobraram no relatório: janela de 6 meses
-   das consultas e idade da conta mais antiga por calendário.
-4. **X-006** — estado por passo de verdade em `/integracao` (KBA ≠ userToken ≠
-   componente montado; hoje o contador vai a 4/4 sem componente nenhum renderizado).
-5. **X-007 + X-008** — recusar nomes de atributo `on*` no snippet e tratar `scope`
-   ausente no cache como miss.
-
-Depois: os P3 (X-010 a X-013).
-
-**Pendências estruturais (não resolvíveis aqui):** `array.io` e `embed.sandbox.array.io`
-são bloqueados pelo proxy deste ambiente, então os web components nunca renderizaram
-de fato e os paths de alerts/monitoring/scoretracker seguem `// UNVERIFIED`. Ambos
-se resolvem na sua máquina com credenciais reais.
-
-## 3. Como retomar
+## 2. Como rodar
 
 ```bash
-# Rodar a POC
-cd /home/user/array-poc
+cd array-poc
 npm install
 npm --workspace worker run db:migrate
-npm run dev                      # worker :8787 + web :5173
-
-# Usar a API real da Array: preencha as duas chaves e reinicie
-cp .env.example .env   # preencha SMARTY_AUTH_ID (appKey) e SMARTY_AUTH_TOKEN (client token)
-# o `npm run dev` roda scripts/sync-env.mjs e gera worker/.dev.vars a partir do .env
-
-# Suíte de QA (ver docs/QA.md)
-npm --workspace worker run test
-bash scripts/smoke-api.sh
-PW_CHROMIUM=/opt/pw-browsers/chromium-1194/chrome-linux/chrome node scripts/e2e-smoke.mjs
-PW_CHROMIUM=/opt/pw-browsers/chromium-1194/chrome-linux/chrome node scripts/snippet-check.mjs
+npm run dev                        # worker :8787 + web :5173  (modo MOCK)
 ```
 
-**Comando exato para retomar o loop de ciclos:**
+**Para usar a API real da Array:**
+```bash
+cp .env.example .env               # preencha SMARTY_AUTH_ID e SMARTY_AUTH_TOKEN
+npm run dev                        # o hook predev gera worker/.dev.vars a partir do .env
+```
+
+Suíte de QA completa: ver `docs/QA.md` (pré-requisitos, comandos e saída esperada).
+
+## 3. Ciclos executados (12)
+
+| # | Entrega | Commit |
+|---|---|---|
+| 0 | Scaffold + pesquisa da API | `98c7a50`, `e5e476d` |
+| 1–2 | POC em modo mock + validação com navegador (1 P0, 7 P1) | `76b3751`, `1c8392b` |
+| 3–4 | Snippet colável, Inspector à prova de payload, fixtures coerentes | `3aed292`, `df86dd1` |
+| 5–6 | Cache isolado por modo + Guia de Integração | `2a091ea`, `dc54ba3` |
+| 7–8 | Guia com artefatos coláveis e fluxo do relatório | `5125690`, `32821a4` |
+| 9–10 | Acabamento de credibilidade + README auditado em clone limpo | `2960f7d`, `bc81fd5` |
+| 11–12 | PII redigida, `.env` com uso real, backlog zerado | `81267b1`, este |
+
+Suítes ao final: **67 testes**, smoke-api **42/42**, e2e/snippet-check/guide-check/
+kv-poison/report-audit/hostile-attrname/regression × 3 — **todos em 0 achados**.
+
+## 4. O limite estrutural (leia antes de amanhã)
+
+O egress deste ambiente **bloqueia `array.io` e `embed[.sandbox].array.io`**. Consequências:
+
+- **Nenhum web component renderizou de fato.** O wrapper degrada para placeholder
+  com o snippet, e o passo 4 do Guia só foi exercitado com o CDN stubado. A POC
+  prova o encadeamento de tokens, o modelo de segredos e a forma dos erros —
+  **não prova nada visual**.
+- **4 paths continuam inferidos** (`// UNVERIFIED` em `worker/src/array/client.ts`):
+  `/alert/v2`, `/alert/v2/{id}`, `/monitoring/v2`, `/report/v2/scoretracker`.
+- O envelope real do `POST /user/v2` e o KBA de sandbox (perguntas do bureau real,
+  não fixtures) são as duas coisas mais prováveis de exigir ajuste.
+
+**Ordem recomendada amanhã:** liberar egress → colar as chaves no `.env` →
+rodar enrollment → KBA → usertoken → report com identidade de sandbox →
+montar um componente → só então conferir os 4 paths inferidos contra o OpenAPI
+da Array (pegue no portal; `docs.array.com` é password-gated).
+
+## 5. Ponto de partida para retomar
+
+Não há defeitos abertos. O que faria sentido num próximo ciclo:
+
+1. Substituir os 4 paths `// UNVERIFIED` pelos reais, com o OpenAPI em mão.
+2. Mapear o envelope real do `GET /report/v2` para o view model da tela
+   (hoje o client repassa o payload cru; em sandbox alguns campos virão vazios).
+3. Renderizar os componentes de verdade e capturar o formato real de `e.detail`
+   por componente no painel de eventos do Playground.
+4. Webhooks (§3.10 da pesquisa) — nada implementado.
+5. Disputas — não documentadas em fonte nenhuma; lacuna admitida na POC.
+
+**Comando para retomar o loop de ciclos:**
 
 ```
-/loop Continue os ciclos fix-and-validate da POC da Array até 02:00 BRT: 1 subagent DEV corrige o Top 5 de docs/VALIDATION_CICLO5.md, 1 subagent VALIDATE audita a regressão com navegador, commit descritivo + push ao fim de cada ciclo, e um resumo de 2-3 linhas do que melhorou.
+/loop Continue os ciclos fix-and-validate da POC da Array: 1 subagent DEV ataca o item 1 da secao "Ponto de partida para retomar" do STATUS.md, 1 subagent VALIDATE audita com navegador, commit descritivo + push ao fim de cada ciclo, e um resumo de 2-3 linhas do que melhorou.
 ```
