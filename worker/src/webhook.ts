@@ -13,7 +13,12 @@
  * // UNVERIFIED (interpretação desta POC): sem assinatura, a única
  * autenticação possível é uma URL secreta — o `ARRAY_WEBHOOK_TOKEN` vive no
  * PATH (`/api/webhooks/array/<token>`), é gerado por você e comparado em tempo
- * constante. Ele nunca é logado nem devolvido.
+ * constante. A POC nunca o grava (a auditoria guarda `/api/webhooks/array/***`)
+ * nem o devolve em resposta alguma — mas atenção (W2-004): o **access log do
+ * runtime** registra o path completo (`wrangler dev` imprime
+ * `POST /api/webhooks/array/<token> 200 OK`), e proxies/CDNs fazem o mesmo em
+ * produção. Não há como a aplicação suprimir esse log; é a fraqueza inerente de
+ * segredo-no-path, documentada no README §Segurança.
  */
 
 /**

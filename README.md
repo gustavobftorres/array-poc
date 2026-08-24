@@ -17,11 +17,14 @@ Dois modos, mesmos endpoints:
   6 alertas. Nada de rede.
 - **SANDBOX** (com credenciais): as mesmas rotas chamam `https://sandbox.array.io/api`.
 
-## Estado: pronta para avaliação (ciclo 9)
+## Estado: pronta para avaliação (ciclo 15)
 
-Nove ciclos de desenvolvimento + QA adversarial (relatórios em `docs/VALIDATION_CICLO*.md`).
+Quinze ciclos de desenvolvimento + QA adversarial (relatórios em `docs/VALIDATION_CICLO*.md`).
 **Não há P0 nem P1 aberto.** Toda a validação funcional foi feita em **modo MOCK**, porque neste
 ambiente o egresso para `array.io` é bloqueado (ver *O que você precisa fazer manualmente*).
+O último ciclo fechou os dois P1 da migração de variáveis (`docs/VALIDATION_CICLO13.md`): o
+ambiente efetivo passou a ser **derivado do host** que está sendo chamado, e a `ARRAY_IDENTITY`
+passou a ser **descartada** em produção em vez de apenas re-rotulada.
 
 Se você abriu este repo agora, a ordem que economiza tempo é:
 
@@ -38,7 +41,7 @@ Se você abriu este repo agora, a ordem que economiza tempo é:
 |---|---|
 | `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, listener de webhook, 163 testes vitest |
 | `web/` | 9 telas React (Dashboard, Enrollment, KBA, Credit Report, Alerts, Guia de Integração, Webhooks, Web Components, API Inspector) |
-| `scripts/` | suítes de validação (HTTP, browser, snippets coláveis, envenenamento de KV, aritmética do relatório) |
+| `scripts/` | suítes de validação (HTTP, browser, snippets coláveis, envenenamento de KV, aritmética do relatório, sondas de variáveis/polling/webhook) — **inventário completo, script por script, em [`docs/QA.md`](docs/QA.md) §2** |
 | `docs/` | pesquisa da API, plano, QA e os relatórios de validação por ciclo |
 
 ## Como rodar
@@ -173,6 +176,19 @@ ARRAY_POLL_TIMEOUT=120                   # segundos (unidade INFERIDA)
 
 Se **ARRAY_APP_KEY ou ARRAY_SERVER_TOKEN** estiver vazio, a POC cai automaticamente em modo MOCK.
 O banner no topo do frontend sempre mostra o modo vigente (`GET /api/status`).
+
+`GET /api/status` diz, além do modo, **quem decidiu o ambiente e qual host está sendo chamado** —
+é o que permite conferir a fronteira sandbox/produção sem ler código:
+
+| Campo | O que significa |
+|---|---|
+| `arrayEnv` | ambiente **efetivo** (`sandbox` \| `production`) — o que vale para CDN e identidade |
+| `arrayEnvSource` | quem decidiu: `ARRAY_BASE_URL` (o host), `ARRAY_ENV` (fallback declarado) ou `default` |
+| `hostClass` | classe do host **realmente** chamado: `sandbox` \| `production` \| `local` (loopback) |
+| `envMismatch` | `null`, ou `{declared, effective, host}` quando `ARRAY_ENV` contradiz o host — o host manda, e a divergência vira aviso e caixa vermelha no Dashboard |
+| `identity.discarded` / `discardReason` | `true` em produção: a identidade foi **esvaziada** e `POST /api/seed` responde 409 |
+| `webhook.listenerUrl` | a `ARRAY_LISTENER_URL` com o último segmento **elidido** (`…/array/***`); `listenerUrlMasked` diz se houve elisão |
+| `poll.unitInferred` | `true` — a unidade em segundos do `ARRAY_POLL_*` é inferência desta POC |
 
 ### O contrato completo das variáveis
 
@@ -356,6 +372,16 @@ guardado no navegador continua valendo depois de reiniciar.
   Consequência prática: plugar uma identidade de **sandbox real** não deixa nome, data de
   nascimento nem endereço em claro no SQLite local nem na tela. A própria tela do Inspector
   explica isso.
+- **Limitação conhecida — o `ARRAY_WEBHOOK_TOKEN` aparece no access log do runtime.** A POC não
+  loga o token: a auditoria grava o path já mascarado (`/api/webhooks/array/***`) e nenhuma
+  resposta o devolve. Mas o segredo vive no **path**, e o `wrangler dev` imprime o path completo
+  no stdout — `[wrangler:inf] POST /api/webhooks/array/<token> 200 OK (25ms)`. **Não há como a
+  aplicação suprimir esse log** (é do runtime, não do código), e proxies reversos e CDNs fazem o
+  mesmo em produção. É a fraqueza inerente de segredo-no-path, e é o preço de a Array **não**
+  assinar os webhooks (§3.10: sem HMAC, sem header customizado). Consequências práticas: trate o
+  stdout do worker e os access logs da sua borda como material sensível, rotacione o token
+  periodicamente (a troca passa pelo Customer Success, porque o registro é manual) e não conclua
+  que houve vazamento novo ao encontrar o token num log do terminal — isso é esperado.
 - Fora do log, a tabela `users` (dados da aplicação, não auditoria) guarda nome, `dob` e o endereço
   do consumidor em claro — é o que as telas listam e o que a aritmética de idade usa —, e o SSN
   **só** como últimos 4 dígitos. Continua sendo um SQLite de desenvolvimento local: não é onde

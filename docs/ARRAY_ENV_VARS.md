@@ -17,9 +17,11 @@ cliente/SDK/quickstart de referência que teria produzido esses nomes e ele não
 | PyPI `array-io` | 404 |
 | Web search pelas strings exatas | nenhuma ocorrência indexada |
 
-Além disso, **esta POC hoje só conhece 4 variáveis**: `SMARTY_AUTH_ID`, `SMARTY_AUTH_TOKEN`,
-`ARRAY_APP_KEY`, `ARRAY_CLIENT_TOKEN`, `ARRAY_ENV` (ver `worker/src/types.ts` e
-`worker/src/config.ts`). Nenhuma das dez variáveis desta pesquisa aparece no código.
+Além disso, *(estado do ciclo 12)* **esta POC só conhecia 4 variáveis**: `SMARTY_AUTH_ID`,
+`SMARTY_AUTH_TOKEN`, `ARRAY_APP_KEY`, `ARRAY_CLIENT_TOKEN`, `ARRAY_ENV`. Nenhuma das variáveis
+desta pesquisa aparecia no código. **Hoje todas as onze aparecem** — `worker/src/types.ts`
+(`Env`), `worker/src/config.ts` (`getConfig`) e a lista `CANONICAL` de `scripts/sync-env.mjs` —
+e os dois nomes `SMARTY_*` viraram aliases deprecados que avisam no boot e no `/api/status`.
 
 Conclusão: a Array **não publica um SDK oficial nem um `.env` de referência**. A autenticação
 dela é HTTP puro com `appKey` + headers `x-credmo-*` (§2). Portanto, para cada variável abaixo
@@ -29,6 +31,14 @@ eu separo dois planos:
 - **O nome da variável em si** — é uma convenção de quem escreveu a lista, sempre INFERIDO.
 
 Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio explicitado).
+
+> **Nota de leitura (ciclo 16).** Este documento é o **registro da pesquisa** feita em
+> 2026-08-24, antes da implementação. As frases no tempo presente sobre "o que a POC faz hoje"
+> descrevem o estado **daquele momento** — e estão marcadas abaixo com *(estado do ciclo 12)*.
+> As **onze** variáveis pesquisadas foram implementadas nos ciclos 13 e 15; a seção
+> [§Impacto na POC](#impacto-na-poc--estado-em-ciclo-15) no fim traz o estado **atual**, item por
+> item, com o arquivo onde cada um vive. O contrato operacional (obrigatoriedade, default,
+> avisos, tetos) está no `README.md` §"O contrato completo das variáveis" e no `.env.example`.
 
 ---
 
@@ -45,7 +55,8 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
   Nunca é header.
 - **Confiança**: **VERIFICADO** (§2, §3.1, §3.4, §4.1; código de produção em
   `creditbanc/creditbanc` e `pkelly504/array-poc`).
-- **Nota**: já implementada nesta POC (`ARRAY_APP_KEY` é alias aceito de `SMARTY_AUTH_ID`).
+- **Nota**: implementada. Desde o ciclo 13 `ARRAY_APP_KEY` é o nome **canônico** e
+  `SMARTY_AUTH_ID` é o alias **deprecado** (aceito com aviso) — a relação era inversa no ciclo 12.
 
 ## 2. `ARRAY_SERVER_TOKEN`
 
@@ -61,9 +72,11 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
 - **Onde entra**: **header** `x-credmo-client-token: <valor>`.
 - **Confiança**: mapeamento conceito↔header **VERIFICADO** (§2; header literal capturado em
   código de produção). O nome `ARRAY_SERVER_TOKEN` como grafia oficial: **INFERIDO / não
-  existe** — a POC hoje chama isso de `ARRAY_CLIENT_TOKEN` / `SMARTY_AUTH_TOKEN`.
+  existe** *(no ciclo 12 a POC chamava isso de `ARRAY_CLIENT_TOKEN` / `SMARTY_AUTH_TOKEN`)*.
 - **Recomendação**: aceitar `ARRAY_SERVER_TOKEN` como **alias** de `ARRAY_CLIENT_TOKEN`, não
-  como um segundo segredo.
+  como um segundo segredo. **Implementado assim** (ciclo 13): `ARRAY_SERVER_TOKEN` é o canônico,
+  `ARRAY_CLIENT_TOKEN` é alias aceito **sem** aviso (é o mesmo segredo, não é depreciação) e
+  `SMARTY_AUTH_TOKEN` é alias **deprecado** com aviso.
 
 ## 3. `ARRAY_BASE_URL=https://sandbox.array.io`
 
@@ -73,8 +86,12 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
   correto como base é `https://sandbox.array.io/api` (produção: `https://array.io/api`), que é
   exatamente o que `worker/src/config.ts` já usa em `SANDBOX_BASE_URL`.
 - **Obrigatória**: **não** — é derivável. Default sensato: `https://sandbox.array.io/api`.
-  Esta POC já resolve isso melhor, por um enum `ARRAY_ENV=sandbox|production`, o que evita
-  que alguém aponte para produção por erro de digitação.
+  *(estado do ciclo 12: a POC resolvia isso só pelo enum `ARRAY_ENV=sandbox|production`.)*
+  **Implementado** (ciclos 13 e 15): a variável existe, é normalizada para terminar em `/api`
+  nas quatro formas, e o **host decide o ambiente** (`sandbox.` → sandbox, outro host remoto →
+  produção, loopback não decide). `ARRAY_ENV` virou fallback; a divergência entre os dois vira
+  `envMismatch` no `/api/status`. `http://` para host remoto e path extra além de `/api` geram
+  aviso, e valor que não é URL http(s) cai no host do `ARRAY_ENV`, também com aviso.
 - **Onde entra**: só configuração do cliente (prefixo da URL).
 - **Confiança**: **VERIFICADO** (§1 — ambos os hosts probados ao vivo).
 - **Nota importante**: o proxy de egresso **deste ambiente bloqueia `array.io`**; a POC já
@@ -98,10 +115,13 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
     `productCode`+`reportKey`+`displayToken` (modo server).
 - **Obrigatória**: **não**. Default sensato: **`server`** — é o modo seguro e é o que uma POC
   com worker deve fazer.
-- **Onde entra**: só configuração do cliente; **decide qual header é enviado**. Note que a
-  lógica é mutuamente exclusiva: `worker/src/array/client.ts` já implementa isso
-  (`if (spec.userToken) x-credmo-user-token else x-credmo-client-token`) — ou seja, o
-  comportamento existe, só não é exposto como variável.
+- **Onde entra**: só configuração do cliente; **decide qual header é enviado**. A lógica é
+  mutuamente exclusiva em `worker/src/array/client.ts`
+  (`if (spec.userToken) x-credmo-user-token else x-credmo-client-token`). *(No ciclo 12 o
+  comportamento existia mas não era exposto como variável.)* **Implementado** (ciclo 13) como
+  **trava**: em `browser` o client token nunca é anexado e a chamada sem `userToken` responde
+  `409 kind:"auth_mode"`. `client` e `user` são aliases documentados de `browser` (ciclo 15,
+  W2-012); qualquer outro valor cai em `server`, o modo seguro, com aviso.
 - **Confiança**: existência dos dois modos e o que muda em cada um: **VERIFICADO** (§2, §3.4,
   §3.5, §4.4). O nome `ARRAY_AUTH_MODE` e o literal `server`: **INFERIDO**.
 
@@ -119,7 +139,15 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
   motivo; "perfil nomeado" é meia-verdade — é um perfil nomeado, mas o nome é da **persona da
   Array**, não um profile de config seu.
 - **Obrigatória**: **não** — só faz sentido em sandbox/seed/demo. Default sensato: uma persona
-  fixa e conhecida (ex.: `BANKER_COLDIRON`) ou vazio.
+  fixa e conhecida (ex.: `BANKER_COLDIRON`) ou vazio. **Implementado assim** (ciclo 13): slug
+  (`banker-coldiron` default, `dalton-lot`, `denise-hennessy`, `donald-blair`) **ou** JSON
+  inline; slug inexistente, path traversal e JSON inválido avisam sem derrubar o boot, e um JSON
+  parcial avisa **quais** campos vieram da persona default (inclusive o SSN — ciclo 15, W2-010).
+  Em produção a identidade é **DESCARTADA** — a config fica sem `ssn`/`dob`/endereço,
+  `POST /api/seed` responde `409 kind:"identity_discarded"` e `/api/personas` devolve
+  `ssn: null` (ciclo 15, W2-002). Só **BANKER COLDIRON** tem DOB/SSN/endereço de fonte de
+  primeira mão; as outras três têm o nome verificado e os demais campos são placeholder
+  `// UNVERIFIED` na faixa `666…`, com selo mostrado na UI.
 - **Onde entra**: **não vai na requisição como campo próprio**. É um seletor que **expande**
   para o corpo de `POST /user/v2`: `firstName`, `lastName`, `ssn`, `dob`, `address{street,
   city, state, zip}`.
@@ -170,6 +198,12 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
 - **Obrigatórias**: **não**, ambas com default. Defaults sensatos: intervalo **1,0 s** (a
   integração de referência da §3.6 usa 3 s — ambos aceitáveis; use backoff), timeout **120 s**.
 - **Onde entram**: só configuração do cliente (loop de retry). Nada vai na requisição.
+  **Implementado** (ciclo 13): `worker/src/array/poll.ts` faz `202 → repetir`, `200 → pronto`,
+  `204 → 502 kind:"report_failed"` (aborta na primeira, não espera o timeout) e
+  `504 kind:"timeout"` citando `ARRAY_POLL_TIMEOUT`. Valor inválido cai no default com aviso;
+  desde o ciclo 15 há **teto de sanidade** — 60 s de intervalo e 3600 s de timeout, clampados com
+  aviso, porque um `1e9` escorregado pendurava a requisição indefinidamente (W2-006). Um `200`
+  com corpo vazio virou erro tratado em vez de "relatório pronto vazio" (W2-008).
 - **Confiança**: necessidade do polling e critério 202/200/204: **VERIFICADO**
   (`docs.array.com/docs/how-to-retrieve-a-credit-report`). Unidade e valores: **INFERIDO**.
 - **Dois avisos VERIFICADOS que afetam o loop**:
@@ -208,6 +242,12 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
 - **Confiança**: **VERIFICADO** (`docs.array.com/docs/how-to-receive-webhooks`, §3.10).
   Catálogo exato de nomes de evento: **não verificado** (a página `/docs/webhook-events` é
   gated; só os títulos/descrições ficaram indexados).
+- **Implementado** (ciclos 13 e 15): a variável é só informativa — `GET /api/webhooks/config` diz
+  o que entregar ao Customer Success. Como o formato embute o `ARRAY_WEBHOOK_TOKEN` no path, a
+  URL **inteira é o segredo**: `/api/status`, `/api/webhooks/config` e a tela Webhooks mostram o
+  último segmento **elidido** (`…/api/webhooks/array/***`), e a URL completa vive só no `.env`
+  (W2-003). Se a URL configurada não contiver o token, a POC avisa que ela não bate com a rota
+  que o listener realmente atende.
 
 ## 10. `ARRAY_WEBHOOK_TOKEN`
 
@@ -234,52 +274,50 @@ Escala de confiança: **VERIFICADO** (fonte citada) / **INFERIDO** (raciocínio 
 - **Defesas adicionais recomendadas** (INFERIDO, já que não há assinatura): allowlist de IP de
   origem se a Array publicar faixas, tratar o payload como **notificação não confiável** e
   sempre reconfirmar pela API antes de agir, e idempotência por `reportKey`/id de evento.
+- **Implementado** (ciclos 13 e 15): token comparado em tempo constante; 404 **idêntico** para
+  token errado e para listener não configurado (a dica ficou no terminal — W2-011); payload
+  tratado como notificação não confiável e nunca usado como verdade; PII do evento redigida como
+  no resto; corpo que não é objeto JSON responde 200 (a doc exige) mas fica marcado
+  `parseable: false` (W2-009); e **idempotência** por id de evento, senão por
+  `eventType+reportKey+clientKey` (coluna `dedupe_key`, migração `0003`) — o segundo POST do
+  mesmo evento devolve `duplicate: true` e grava uma linha só.
+- **Limitação assumida e não corrigível pela aplicação**: segredo-no-path aparece no **access log
+  do runtime**. O `wrangler dev` imprime `POST /api/webhooks/array/<token> 200 OK` no stdout, e
+  proxies/CDNs fazem o mesmo em produção (W2-004). A POC não grava nem devolve o token, mas não
+  há como suprimir o log do runtime: trate o stdout e os access logs como sensíveis e rotacione
+  o token. A allowlist de IP e a assinatura seguem **não** disponíveis — é o que perguntar ao
+  Customer Success ao registrar o listener.
 
 ---
 
-## Impacto na POC
+## Impacto na POC — estado em ciclo 15
 
-O que existe hoje (`worker/src/config.ts`, `worker/src/array/client.ts`,
-`worker/src/index.ts`): `appKey` + client token, seleção sandbox/produção por `ARRAY_ENV`,
-escolha automática do header `x-credmo-user-token` vs `x-credmo-client-token`,
-`productCode` com default `credmo3bReportScore`, e retry de relatório por heurística de
-corpo vazio.
+Esta seção substitui a lista de pendências da pesquisa original: **as oito estão implementadas**.
+Cada item traz onde vive e o que ficou de fora.
 
-O que **precisa ser implementado e não existe**:
+| # | O que a pesquisa pedia | Estado | Onde |
+|---|---|---|---|
+| 1 | Polling por status HTTP (`202`/`200`/`204`) em vez da heurística de corpo vazio | **feito** (ciclo 13) | `worker/src/array/poll.ts`; `204` aborta na primeira tentativa |
+| 2 | Intervalo e timeout configuráveis | **feito** (ciclo 13) + tetos de sanidade (ciclo 15) | `ARRAY_POLL_INTERVAL`/`ARRAY_POLL_TIMEOUT`, `parseSeconds` em `worker/src/config.ts` |
+| 3 | Distinguir falha permanente de "ainda processando"; tokens valem **uma** recuperação | **feito** | `502 kind:"report_failed"` vs `504 kind:"timeout"`; `PUT /api/array/report` renova o `displayToken` |
+| 4 | Endpoint de listener que valide o segredo do path e responda 200 rápido | **feito** (ciclo 13), endurecido no 15 | `POST /api/webhooks/array/:token` em `worker/src/index.ts` + `worker/src/webhook.ts`; tela Webhooks |
+| 5 | `ARRAY_WEBHOOK_TOKEN` como segredo local, comparação em tempo constante, nunca logado | **feito, com uma ressalva** | `timingSafeEqual`; a auditoria grava `/api/webhooks/array/***`. **Ressalva**: o access log do runtime (`wrangler dev`) imprime o path completo e a aplicação não pode suprimi-lo (W2-004) |
+| 6 | `ARRAY_AUTH_MODE` explícito como trava | **feito** (ciclo 13) | `parseAuthMode`; `409 kind:"auth_mode"` em 12 das 14 rotas exercitadas pelo QA, com 0 requisições levando o client token |
+| 7 | `ARRAY_SERVER_TOKEN` como alias; `ARRAY_PRODUCT_CODE`/`ARRAY_IDENTITY` como configuração | **feito** (ciclo 13) | `getConfig`; `SMARTY_*` virou alias **deprecado** com aviso |
+| 8 | `ARRAY_BASE_URL` como override, normalizando `/api` | **feito** (ciclo 13) e promovido a **fonte da verdade do ambiente** (ciclo 15) | `normalizeBaseUrl` + `classifyHost`; `ARRAY_ENV` virou fallback e `wrangler.toml` não o fixa mais |
 
-1. **Polling correto de relatório por status HTTP.** Substituir a heurística "corpo vazio" por
-   `202 → repetir`, `200 → pronto`, `204 → falha permanente`. É a correção de maior valor
-   desta pesquisa: elimina uma inferência marcada `// UNVERIFIED` no Guia de Integração e
-   corrige um bug latente (hoje um `204` de falha seria lido como "ainda vazio" e o loop
-   giraria até o timeout).
-2. **Intervalo e timeout de polling configuráveis** (`ARRAY_POLL_INTERVAL`, segundos, default
-   1,0; `ARRAY_POLL_TIMEOUT`, segundos, default 120 — e avaliar 300 pelo caso de re-tentativa
-   de vários minutos). Hoje o intervalo de 3000 ms está hard-coded e não há timeout explícito.
-3. **Distinguir falha permanente de "ainda processando"** na resposta ao cliente da POC, e
-   registrar que os tokens valem **uma** recuperação (usar `PUT /report/v2` para reler).
-4. **Endpoint de listener de webhook**: rota `POST` que aceite JSON, valide o segredo do path,
-   **responda 200 rapidamente** e enfileire o processamento; sem confiar no payload como
-   verdade. Não existe nada disso hoje. Note que **não há API de registro** — a URL é
-   entregue ao Customer Success da Array, então documente isso no README como passo manual.
-5. **`ARRAY_WEBHOOK_TOKEN` como segredo gerado localmente** (não como credencial da Array), com
-   comparação em tempo constante e o valor jamais logado (a POC já tem redação de PII no
-   Inspector — estender a ela).
-6. **`ARRAY_AUTH_MODE` explícito** (`server` default | `browser`), hoje implícito na presença
-   de `spec.userToken`. Tornar explícito serve de trava: em modo `browser` o worker nunca deve
-   poder enviar o client token.
-7. **`ARRAY_SERVER_TOKEN` como alias** de `ARRAY_CLIENT_TOKEN`/`SMARTY_AUTH_TOKEN` — e
-   `ARRAY_PRODUCT_CODE` / `ARRAY_IDENTITY` como configuração de default e de seed, em vez de
-   literais no código.
-8. **`ARRAY_BASE_URL` como override opcional**, mantendo `ARRAY_ENV` como caminho principal;
-   se aceitar a variável, **normalizar o sufixo `/api`** (o valor `https://sandbox.array.io`
-   da lista original quebraria todas as rotas).
+O que a pesquisa **não** previa e o QA adversarial obrigou a acrescentar (ciclo 15,
+`docs/VALIDATION_CICLO13.md`): a identidade de sandbox **descartada** em produção em vez de
+re-rotulada (W2-002, era PII saindo para um host de produção), o ambiente **derivado do host**
+com `envMismatch` visível (W2-001), a elisão do token dentro da `ARRAY_LISTENER_URL` (W2-003) e
+os avisos de `http://` remoto e de path extra na base URL (W2-005, W2-007).
 
 ## Lacunas
 
 1. **`/docs/webhook-events` continua gated** — não há lista verificada de nomes de evento nem
    um exemplo real de payload de webhook. Sabemos as duas famílias e os campos citados
    (`clientKey`, `reportKey`, `displayToken`, `productCode`), não o envelope.
-2. **Não existe `ARRAY_*` canônico.** Nenhuma das dez variáveis aparece em nenhum repositório
+2. **Não existe `ARRAY_*` canônico.** Nenhuma das onze variáveis aparece em nenhum repositório
    público, npm ou PyPI. O artefato de referência procurado (SDK/quickstart oficial da Array)
    **não existe**; qualquer grafia é convenção local.
 3. **Catálogo completo de `productCode`** — só o padrão e 4 códigos. O conjunto é por contrato.

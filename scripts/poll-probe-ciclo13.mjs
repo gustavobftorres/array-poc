@@ -16,12 +16,15 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { freePort } from './free-port.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = path.join(root, 'scripts/.tmp-ciclo13')
 fs.mkdirSync(out, { recursive: true })
 
-const UPSTREAM_PORT = 8901
+// W2-014: porta livre (o upstream falso em porta fixa colidia e o script
+// reportava 0 requisições como se fosse defeito do produto).
+const UPSTREAM_PORT = await freePort(Number(process.env.UPSTREAM_PORT ?? 8901))
 let SCRIPT = ['200']
 let hits = []
 
@@ -44,7 +47,7 @@ const upstream = http.createServer((req, res) => {
 })
 await new Promise((r) => upstream.listen(UPSTREAM_PORT, '127.0.0.1', r))
 
-let port = 8910
+let port = await freePort(Number(process.env.WORKER_PORT ?? 8910))
 async function withWorker(vars, fn) {
   const p = port++
   const args = ['wrangler', 'dev', '--local', '--port', String(p)]

@@ -8,9 +8,11 @@ import http from 'node:http'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { freePort } from './free-port.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const PORT = 8903
+// W2-014: porta livre em vez de porta fixa.
+const PORT = await freePort(Number(process.env.UPSTREAM_PORT ?? 8903))
 let SCRIPT = ['200']
 let hits = []
 const upstream = http.createServer((req, res) => {
@@ -27,7 +29,7 @@ const upstream = http.createServer((req, res) => {
 })
 await new Promise((r) => upstream.listen(PORT, '127.0.0.1', r))
 
-let p = 8930
+let p = await freePort(Number(process.env.WORKER_PORT ?? 8930))
 async function run(name, vars, script, maxWaitMs) {
   SCRIPT = script
   hits = []

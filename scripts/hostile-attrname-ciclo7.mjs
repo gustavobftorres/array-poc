@@ -11,6 +11,7 @@ import { chromium } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
+import { freePort } from './free-port.mjs'
 
 const WEB = process.env.WEB ?? 'http://localhost:5173'
 const TMP = path.join(process.cwd(), 'scripts/.tmp-attr7')
@@ -92,13 +93,16 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': f.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript' })
   res.end(fs.readFileSync(f))
 })
-await new Promise((r) => server.listen(8901, '127.0.0.1', r))
+// W2-014: porta livre em vez de porta fixa — uma 8901 ocupada fazia o
+// servidor de páginas não subir e o script acusar o produto.
+const PAGE_PORT = await freePort(Number(process.env.PAGE_PORT ?? 8901))
+await new Promise((r) => server.listen(PAGE_PORT, '127.0.0.1', r))
 
 for (const [id, f] of pages) {
   const p = await ctx.newPage()
   let dialogs = 0
   p.on('dialog', (d) => (dialogs++, d.dismiss()))
-  await p.goto(`http://127.0.0.1:8901/${path.basename(f)}`, { waitUntil: 'load' }).catch(() => {})
+  await p.goto(`http://127.0.0.1:${PAGE_PORT}/${path.basename(f)}`, { waitUntil: 'load' }).catch(() => {})
   await p.waitForTimeout(400)
   const probe = await p.evaluate(() => {
     const bad = []

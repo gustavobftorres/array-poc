@@ -55,6 +55,63 @@ Os binários disponíveis:
 | `node scripts/pii-probe-ciclo11.mjs` | sonda independente de PII sobre `worker/src/redact.ts` e o estado local | **5 achado(s) esperados** — 4 sentinelas dentro dos envelopes `{_truncated,preview}`/`{raw}` e no sqlite bruto de `users` (por design) + a mensagem de erro do upstream não redigida (W2-013) |
 | `npm --workspace worker run typecheck` / `npm --workspace web run build` | tsc + vite | sem erros |
 
+### 2.1 Inventário de `scripts/` — o que rodar, o que não rodar, quantos achados esperar
+
+A tabela acima é a **suíte de regressão** (o que o README manda rodar). O diretório tem mais
+coisa: helpers que não se rodam sozinhos e scripts de ciclos antigos, superados mas mantidos como
+evidência. Esta é a lista **completa** de `scripts/`, para ninguém rodar tudo e concluir que há
+regressão onde não há.
+
+| Arquivo | Categoria | Achados esperados |
+|---|---|---|
+| `smoke-api.sh` | suíte | `pass=42 fail=0` |
+| `e2e-smoke.mjs` | suíte | 0 |
+| `snippet-check.mjs` | suíte | 0 |
+| `regression-ciclo3.mjs` | suíte | 0 (uma linha por ID) |
+| `guide-check-ciclo6.mjs` | suíte | 0 |
+| `verify-guide-ciclo7.mjs` | suíte | 0 (+ 7 requisições vistas) |
+| `walkthrough-ciclo7.mjs` | suíte | 0 |
+| `kv-poison-ciclo7.mjs` | suíte | 0 |
+| `hostile-attrname-ciclo7.mjs` | suíte | 0 (19/19 recusados) |
+| `step-state-ciclo7.mjs` | suíte | 0 |
+| `report-audit-ciclo7.mjs [N]` | suíte | 0 |
+| `regression-ciclo9.mjs` | suíte | 0 (Y-001…Y-007 CORRIGIDO) |
+| `step4-stuck-ciclo9.mjs` | suíte | 0 (A feito, B e C pendentes) |
+| `walkthrough-ciclo13.mjs` | suíte | 0 |
+| **`integration-audit-ciclo5.mjs`** | suíte, **achado conhecido** | **exatamente 3** — ver abaixo |
+| **`pii-probe-ciclo11.mjs`** | suíte, **achado conhecido** | **exatamente 5** — ver abaixo |
+| `baseurl-matrix-ciclo13.mjs` | sonda do ciclo 14 (não precisa da POC de pé) | **0** desde o ciclo 15 (eram 2: o `http://` remoto sem aviso, W2-005, hoje avisa) |
+| `poll-probe-ciclo13.mjs` | sonda do ciclo 14 (sobe um `wrangler dev` por cenário; ~20 min) | 18 cenários e **4 achados**, todos expectativa do harness (medido no ciclo 16): `ARRAY_POLL_TIMEOUT=abc` e `=0` caem no default de **120 s**, então a POC de propósito não responde nos 20 s que a sonda espera — daí os pares "não respondeu"/"esperado kind timeout, veio null". Os dois casos de valor gigante hoje trazem no `warnings[]` o clamp ("usando 3600s"/"usando 60s") |
+| `poll-probe2-ciclo13.mjs` | sonda do ciclo 14 (worker limpo por caso) | 3 blocos de log, sem contador. Medido no ciclo 16: intervalo `1e9` → `504` na 1ª tentativa (clampado a 60 s); `200` com corpo vazio → `502` "sem corpo" (W2-008); e o 3º caso (`timeout=1e9`, 202 infinito) **continua sem responder nos 15 s do harness** — o teto é 3600 s, não 15 s, então isso é o clamp funcionando, **não** o defeito W2-006 de volta (confira o `warnings[]`: ele diz "usando 3600s") |
+| `report-arith-ciclo5.mjs [N]` | verificação de aritmética, **ainda válida** (complementa `report-audit-ciclo7`) | **0** (medido: 10 relatórios) |
+| `walkthrough-ciclo5.mjs` | passeio de navegador **superado** por `walkthrough-ciclo7/13` — varre **8** telas (não conhece a Webhooks) | **0** (medido); mantido como evidência do ciclo 5, mas prefira os sucessores, que cobrem as 9 |
+| `hostile-snippet-ciclo5.mjs` | fase hostil do snippet, **superada** por `snippet-check.mjs` (que absorveu o payload hostil) e por `hostile-attrname-ciclo7.mjs` | **0** (medido); mantido como evidência |
+| `fake-array-ciclo7.mjs` | **helper** — Array falsa usada por `verify-guide-ciclo7` | não rode sozinho (fica em foreground) |
+| `fake-upstream-ciclo13.mjs` | **helper** — upstream instrumentado (JSONL de headers/corpo) | idem |
+| `boot-worker-ciclo13.sh` | **helper** — sobe worker isolado com `--var` | imprime o PID; `kill` no fim |
+| `free-port.mjs` | **helper** — `freePort`/`waitForPort` (W2-014) | módulo, sem saída |
+| `sync-env.mjs` | **ferramenta do produto** — gera `worker/.dev.vars` a partir do `.env` (hook `predev`) | não é teste |
+| `check-html.py` | **helper** — parser de HTML independente do browser (balanceamento de tags, self-closing em não-void), usado na conferência dos snippets | `python3 scripts/check-html.py arquivo.html` |
+
+**Os dois achados conhecidos, e por que são inócuos** (W2-013 — foram medidos, não presumidos):
+
+- `integration-audit-ciclo5.mjs` → **3 achados**. O script audita um Guia de Integração de
+  **4 passos**; o Guia tem **6** desde o ciclo 6 (`5125690`). Os três achados são a expectativa
+  velha do script, não defeito: "esperados 4 passos, encontrados 6", "sessão limpa deveria mostrar
+  0/4" e o `expiresAt` — que a própria tela já marca como invenção desta POC, não campo da Array.
+  Nada aqui é sobre o comportamento do produto; é o script que envelheceu.
+- `pii-probe-ciclo11.mjs` → **5 achados**. O script está **intocado** desde `c83f61a` e o
+  `worker/src/redact.ts` que ele audita não foi modificado pelos ciclos 13/15. Quatro dos cinco
+  são sentinelas **por design**: elas vivem dentro dos envelopes `{_truncated, preview}` e
+  `{raw}` (o Inspector preserva a **forma** do payload de propósito) e no sqlite bruto da tabela
+  `users`, que guarda nome/DOB/endereço em claro — documentado no README §Segurança. O quinto é a
+  **mensagem de erro do upstream, que não é redigida** — é uma função pura de `redact.ts`,
+  reproduzida idêntica contra o commit anterior. Nenhum dos cinco vaza o `ARRAY_WEBHOOK_TOKEN`
+  nem PII das rotas novas (os eventos de webhook **são** redigidos).
+
+**Qualquer número diferente de 3 e 5 nesses dois é regressão.** Em todos os outros, qualquer
+achado é regressão.
+
 Todos os `scripts/.tmp-*/` (`.tmp-snippets`, `.tmp-hostile`, `.tmp-attr7`, `.tmp-guide7`,
 `.tmp-ciclo9`) são recriados a cada execução (HTML + PNG por componente) e **não devem ser
 comitados** — o `.gitignore` cobre o glob `scripts/.tmp-*` desde o ciclo 11 (Z-006). Confira com
@@ -166,7 +223,10 @@ exercita mais o envelope de truncamento.
   `ARRAY_POLL_TIMEOUT` estourado → **504 `kind: timeout`** citando a variável.
 - **Personas (`ARRAY_IDENTITY`)**: `GET /api/personas` lista as quatro personas conhecidas
   (`banker-coldiron` verificada; as outras três com DOB/SSN/endereço marcados `// UNVERIFIED`) e a
-  ativa. Em `ARRAY_ENV=production` o SSN vem `null` e a persona é ignorada, com aviso.
+  ativa. Com o ambiente **efetivo** em produção (host de `ARRAY_BASE_URL` ou `ARRAY_ENV` como
+  fallback) o `ssn` de **todas** vem `null` (só `ssnLast4`) e a ativa vem
+  `source: "discarded"` — a identidade é **descartada**, não ignorada, e `POST /api/seed`
+  responde 409 (ver §Ciclo 15).
 - **Webhooks**:
   ```bash
   cd worker && npx wrangler dev --local --port 8788 --var ARRAY_WEBHOOK_TOKEN:SEGREDO-DO-PATH
@@ -210,7 +270,11 @@ exercita mais o envelope de truncamento.
   nem o devolve". Ao rodar QA, trate o stdout do worker como sensível (`grep` no log do terminal
   ACHA o token — isso é esperado, não é achado novo).
 - **Tetos de `ARRAY_POLL_*` (W2-006)**: intervalo ≤ 60 s, timeout ≤ 3600 s; acima disso a POC
-  clampa e avisa em vez de pendurar a requisição.
+  clampa e avisa (`warnings[]` diz "usando 60s"/"usando 3600s") em vez de deixar o valor absurdo
+  passar. Leia o teto pelo que ele é: um `ARRAY_POLL_TIMEOUT=1e9` com upstream em `202` eterno
+  não pendura **para sempre**, mas ainda pode segurar a requisição por **até uma hora** — o clamp
+  é sanidade, não um limite curto. Numa sonda de 15 s isso aparece como "sem resposta", e é
+  esperado.
 - **Avisos novos de base URL**: `http://` para host remoto (W2-005) e path extra além de `/api`
   (W2-007) aparecem em `warnings[]`.
 - **Listener mais duro (W2-009/W2-011)**: corpo que não é objeto JSON responde `200` (a doc exige)
@@ -220,8 +284,9 @@ exercita mais o envelope de truncamento.
   **idêntico** com e sem `ARRAY_WEBHOOK_TOKEN` configurado — a dica foi para o terminal.
   Rode `npm run db:migrate` depois de atualizar (sem a migração o listener ainda grava, só não
   deduplica).
-- **`GET /report/v2` com 200 e corpo vazio (W2-008)** virou erro tratado (502 `kind:"http"`,
-  mensagem "sem corpo") em vez de "relatório pronto vazio".
+- **`GET /report/v2` com 200 e corpo vazio (W2-008)** virou erro tratado — `502` com
+  `kind: "http"` e a mensagem "respondeu HTTP 200 sem corpo … resposta malformada. Nada foi
+  gravado" — em vez de "relatório pronto vazio" gravado no D1.
 - **`ARRAY_AUTH_MODE`: `client` e `user` são aliases documentados de `browser`** (W2-012).
 - **JSON parcial em `ARRAY_IDENTITY` avisa quais campos vieram da persona default** (W2-010),
   inclusive o SSN.
@@ -233,7 +298,7 @@ do `npm run dev` já estar de pé, **exceto** o `walkthrough-ciclo13.mjs` (preci
 
 | Script | O que faz | Saída |
 |---|---|---|
-| `node scripts/baseurl-matrix-ciclo13.mjs` | 22 valores de `ARRAY_BASE_URL` × com/sem `ARRAY_ENV`, chamando `getConfig` transpilado com esbuild (não sobe worker). Imprime `baseUrl`/`baseUrlSource`/`arrayEnv`/CDN/aviso por caso | tabela + `N achado(s)`; hoje **2** (o `http://` remoto sem aviso, W2-005 — loopback não é sinalizado) |
+| `node scripts/baseurl-matrix-ciclo13.mjs` | 22 valores de `ARRAY_BASE_URL` × com/sem `ARRAY_ENV`, chamando `getConfig` transpilado com esbuild (não sobe worker). Imprime `baseUrl`/`baseUrlSource`/`arrayEnv`/CDN/aviso por caso | tabela + `N achado(s)`; **0** desde o ciclo 15 (eram 2 — o `http://` remoto sem aviso, W2-005; loopback continua aceito sem aviso, de propósito) |
 | `node scripts/fake-upstream-ciclo13.mjs --port 8905 --log … --script "202,202,200"` | upstream falso instrumentado: grava método, path, query, **todos os headers**, corpo e timestamp de cada requisição em JSONL. Use `--script` para roteirizar o `GET /report/v2` (`202`, `204`, `200-empty`, `500`, `202*`) | fica em foreground; mate quando acabar |
 | `node scripts/poll-probe-ciclo13.mjs` | 18 cenários de polling, um `wrangler dev` isolado por cenário; **mede** nº de requisições, os intervalos reais e o tempo até o 504 | 4 "achados" são expectativa do harness (timeout inválido cai no default de 120 s, então a resposta demora de propósito) |
 | `node scripts/poll-probe2-ciclo13.mjs` | os 3 casos que exigem worker limpo: intervalo gigante, `200` com corpo vazio, timeout gigante | 3 blocos de log (sem contador) |
@@ -247,7 +312,12 @@ Passos não-óbvios aprendidos aqui (custam tempo):
   falsos** ("requisições vistas: 0", "Y-002 NAO CORRIGIDO"). Agora os dois usam
   `scripts/free-port.mjs`: a porta preferida se estiver livre, senão uma efêmera, e um
   `waitForPort` que aborta com `ERRO DE HARNESS: … porta ocupada` e **exit 2** em vez de acusar o
-  produto. Dá para forçar a porta com `PORT=`/`PORT9=`.
+  produto. Dá para forçar a porta com `PORT=`/`PORT9=`. No ciclo 16 a mesma correção alcançou os
+  outros três scripts que abriam porta fixa: `hostile-attrname-ciclo7.mjs` (servidor de páginas,
+  era 8901 — `PAGE_PORT=`), `poll-probe-ciclo13.mjs` e `poll-probe2-ciclo13.mjs` (upstream falso e
+  a faixa de portas dos workers isolados — `UPSTREAM_PORT=`, `WORKER_PORT=`). **Nenhum script da
+  suíte abre porta fixa hoje**; se um achado vier acompanhado de "0 requisições vistas", suspeite
+  do harness antes do produto.
 - **Matar worker de teste**: `kill` no PID do `wrangler` deixa o `workerd` vivo e a porta presa.
   Mate os dois (`ps -eo pid,args | grep -E "[w]rangler dev|[w]orkerd serve"`) e **não** derrube
   por engano o `workerd` do `:8787` (o do `npm run dev` tem dois processos `workerd`, um deles com

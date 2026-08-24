@@ -173,7 +173,27 @@ prova. Os scripts novos ficam em `scripts/*-ciclo13.*` (ver `docs/QA.md` §"Cicl
 
 ---
 
-## 4. Top 5 do próximo ciclo
+## 4. Estado dos 14 defeitos (fechado no ciclo 15/16)
+
+Todos foram corrigidos. Esta tabela existe para não se ler a lista acima como backlog aberto:
+
+| ID | Onde foi fechado |
+|---|---|
+| W2-001 | `worker/src/config.ts` — ambiente **derivado do host** (`classifyHost`, `arrayEnvSource`, `hostClass`, `envMismatch`); `wrangler.toml` não fixa mais `ARRAY_ENV` |
+| W2-002 | `worker/src/config.ts` + `worker/src/personas.ts` — identidade **descartada** (`DISCARDED_IDENTITY`, invariante testada) e `POST /api/seed` → `409 identity_discarded` |
+| W2-003 | `worker/src/webhook.ts` `maskListenerUrl` — `/api/status`, `/api/webhooks/config` e a tela mostram `…/array/***` |
+| W2-004 | **não é corrigível pela aplicação** — documentado como limitação conhecida no `README.md` §Segurança, no `.env.example` e em `docs/QA.md` §Ciclo 15 |
+| W2-005 / W2-007 | avisos em `normalizeBaseUrl` (`http://` remoto; path extra além de `/api`) |
+| W2-006 | `MAX_POLL_INTERVAL_S=60` / `MAX_POLL_TIMEOUT_S=3600` com clamp e aviso |
+| W2-008 | `worker/src/array/client.ts` — `200` sem corpo → `502 kind:"http"` |
+| W2-009 | `normalizeWebhookEvent` (`parseable:false`) + `dedupe_key` (migração `0003`) |
+| W2-010 | aviso listando os campos herdados da persona default |
+| W2-011 | 404 do listener **idêntico** com e sem token configurado |
+| W2-012 | `client`/`user` documentados como aliases de `browser` |
+| W2-013 | os dois scripts entraram na suíte do `README.md` e em `docs/QA.md` §2.1, com o número esperado de achados e o motivo |
+| W2-014 | `scripts/free-port.mjs`; nenhum script da suíte abre porta fixa (medido: com 8901 ocupada, `hostile-attrname-ciclo7` cai em porta efêmera e sai em 0 achados) |
+
+## 5. Top 5 do próximo ciclo (escrito no ciclo 14; já executado)
 
 1. **W2-002** — esvaziar a identidade de verdade em produção (ou recusar `/api/seed`); é o único
    achado com risco de PII real saindo para um host de produção.

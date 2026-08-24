@@ -2,9 +2,13 @@
  * VALIDATE ciclo 14 — matriz de normalização do ARRAY_BASE_URL.
  *
  * Evidência independente: transpila `worker/src/config.ts` com esbuild e chama
- * `getConfig` direto, com e sem `ARRAY_ENV` (a wrangler.toml define
- * ARRAY_ENV="sandbox" em [vars], então o caso "sem ARRAY_ENV" NÃO acontece na
- * POC rodando — é exatamente o que este script expõe).
+ * `getConfig` direto, com e sem `ARRAY_ENV` declarado.
+ *
+ * Nota do ciclo 15 (W2-001): quando este script foi escrito, `wrangler.toml`
+ * fixava ARRAY_ENV="sandbox" em [vars] e o caso "sem ARRAY_ENV" NÃO acontecia
+ * na POC rodando — era exatamente o que o script expunha. Isso foi corrigido:
+ * a wrangler.toml não fixa mais a variável, os DOIS casos são reais, e o host
+ * de ARRAY_BASE_URL decide o ambiente (ARRAY_ENV virou fallback).
  *
  * Uso: node scripts/baseurl-matrix-ciclo13.mjs
  */
@@ -53,7 +57,7 @@ const CASES = [
 
 const rows = []
 for (const [label, value] of CASES) {
-  for (const envMode of ['ARRAY_ENV=sandbox (wrangler.toml)', 'sem ARRAY_ENV']) {
+  for (const envMode of ['ARRAY_ENV=sandbox (declarado)', 'sem ARRAY_ENV']) {
     const env = { ARRAY_APP_KEY: 'A'.repeat(36), ARRAY_SERVER_TOKEN: 'SECRET' }
     if (value !== undefined) env.ARRAY_BASE_URL = value
     if (envMode.startsWith('ARRAY_ENV')) env.ARRAY_ENV = 'sandbox'
