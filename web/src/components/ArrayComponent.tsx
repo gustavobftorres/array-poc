@@ -267,9 +267,24 @@ export interface ArrayComponentProps {
    * a userToken — to say that step 4 happened (X-006).
    */
   onMounted?: (tag: string) => void
+  /**
+   * Called when there is no component in the DOM any more: the CDN load failed
+   * or this instance was unmounted by the user. The Guia uses it to stop
+   * claiming step 4 after a mount that no longer exists (Z-001).
+   */
+  onUnmounted?: () => void
 }
 
-export function ArrayComponent({ cdn, tag, attrs, appKey, describe, expects, onMounted }: ArrayComponentProps) {
+export function ArrayComponent({
+  cdn,
+  tag,
+  attrs,
+  appKey,
+  describe,
+  expects,
+  onMounted,
+  onUnmounted,
+}: ArrayComponentProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [state, setState] = useState<LoadState>('idle')
   const [error, setError] = useState<string>('')
@@ -287,6 +302,9 @@ export function ArrayComponent({ cdn, tag, attrs, appKey, describe, expects, onM
         if (!alive) return
         setError(e.message)
         setState('failed')
+        // Nothing is in the DOM: the recorded mount event must not survive a
+        // failed load (Z-001).
+        onUnmounted?.()
       })
     return () => {
       alive = false

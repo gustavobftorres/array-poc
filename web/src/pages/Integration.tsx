@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, CopyButton } from '../components/ui'
-import { useSession } from '../lib/session'
+import { tabId, useSession } from '../lib/session'
 import { APP_KEY_PLACEHOLDER, USER_TOKEN_PLACEHOLDER, isValidAppKey } from '../components/ArrayComponent'
 
 /**
@@ -579,6 +579,8 @@ export function IntegrationGuide() {
    */
   const state = useMemo<Record<string, StepState>>(() => {
     const semeado = session.userTokenSource === 'seed'
+    const mountedHere = !!session.componentMountedAt && session.componentMountedTab === tabId()
+    const mountedOtherTab = !!session.componentMountedAt && !mountedHere
     return {
       user: { done: !!session.clientKey, value: session.clientKey, label: 'clientKey' },
       kba: {
@@ -606,19 +608,24 @@ export function IntegrationGuide() {
               : 'existe userToken na sessão, mas ele veio do KBA (passo 2), não desta rota'
             : undefined,
       },
+      // Z-001: the event is scoped to the TAB that mounted it and is cleared on
+      // "Desmontar" and on a failed CDN load, so this step cannot keep claiming
+      // a component in a tab where none was ever mounted. `localStorage` is
+      // shared by every tab; `sessionStorage` (tabId) is not.
       component: {
-        done: !!session.componentMountedAt,
-        value: session.componentMountedAt
-          ? `<${session.componentTag}> montado em ${session.componentMountedAt}` +
+        done: mountedHere,
+        value: mountedHere
+          ? `<${session.componentTag}> montado nesta aba em ${session.componentMountedAt}` +
             (isValidAppKey(appKey) ? ` com appKey de ${appKey.length} chars` : '')
           : '',
-        label: 'web component montado no DOM',
-        why:
-          !session.componentMountedAt && !isValidAppKey(appKey)
-            ? 'sem appKey de 36 caracteres o loader da Array não valida o bundle'
-            : !session.componentMountedAt
-              ? 'nenhum componente montado nesta sessão (o CDN embed.array.io está bloqueado neste ambiente)'
-              : undefined,
+        label: 'web component montado nesta aba',
+        why: mountedHere
+          ? undefined
+          : mountedOtherTab
+            ? 'um componente foi montado em outra aba/janela desta sessão — este passo só conta o que montou nesta aba'
+            : !isValidAppKey(appKey)
+              ? 'sem appKey de 36 caracteres o loader da Array não valida o bundle'
+              : 'nenhum componente montado nesta aba (o CDN embed.array.io está bloqueado neste ambiente)',
       },
       'order-report': {
         // Derived from the EVENT (`reportOrderedAt`), like every other step: a
@@ -654,6 +661,7 @@ export function IntegrationGuide() {
     session.kbaAuthenticatedAt,
     session.userTokenMintedAt,
     session.componentMountedAt,
+    session.componentMountedTab,
     session.componentTag,
     session.userTokenSource,
     session.reportKey,

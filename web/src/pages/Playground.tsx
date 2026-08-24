@@ -13,7 +13,7 @@ import {
 } from '../components/ArrayComponent'
 import { Link } from 'react-router-dom'
 import { Card, CopyButton, Empty, useAsync, ErrorBox } from '../components/ui'
-import { useSession } from '../lib/session'
+import { NO_COMPONENT_MOUNTED, tabId, useSession } from '../lib/session'
 import { api } from '../lib/api'
 
 /**
@@ -194,6 +194,18 @@ export function Playground() {
   const [attrError, setAttrError] = useState('')
   const { events, clear } = useArrayEvents()
   const token = useAsync<Awaited<ReturnType<typeof api.userToken>>>()
+
+  // Z-001: this screen is the ONLY place that can mount a component, and it
+  // opens with nothing mounted. So if the session still claims a mount made in
+  // THIS tab, that component is gone (navigation, reload, a click on
+  // "Desmontar" in a previous visit) — drop the event instead of letting the
+  // Guia keep saying step 4 is done.
+  useEffect(() => {
+    if (session.componentMountedAt && session.componentMountedTab === tabId()) {
+      patch(NO_COMPONENT_MOUNTED)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const spec = useMemo(() => CATALOG.find((c) => c.tag === tag)!, [tag])
   const appKey = status?.appKey ?? ''
@@ -415,7 +427,17 @@ export function Playground() {
             title={<code>{`<${spec.tag}>`}</code>}
             actions={
               mounted ? (
-                <button className="tiny" onClick={() => setMounted(false)}>Desmontar</button>
+                <button
+                  className="tiny"
+                  onClick={() => {
+                    setMounted(false)
+                    // The element leaves the DOM, so the event that says "montado"
+                    // has to leave the session with it (Z-001).
+                    patch(NO_COMPONENT_MOUNTED)
+                  }}
+                >
+                  Desmontar
+                </button>
               ) : (
                 <button className="tiny primary" onClick={() => setMounted(true)}>Montar componente</button>
               )
@@ -430,8 +452,13 @@ export function Playground() {
                 describe={spec.describe}
                 expects={spec.expects}
                 onMounted={(tag) =>
-                  patch({ componentMountedAt: new Date().toISOString(), componentTag: tag })
+                  patch({
+                    componentMountedAt: new Date().toISOString(),
+                    componentTag: tag,
+                    componentMountedTab: tabId(),
+                  })
                 }
+                onUnmounted={() => patch(NO_COMPONENT_MOUNTED)}
               />
             ) : (
               <div className="component-host">

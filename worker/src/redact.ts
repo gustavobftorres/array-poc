@@ -22,6 +22,68 @@ const SENSITIVE_KEYS = [
 
 export const REDACTED = '[REDACTED]'
 
+/**
+ * Identity PII (Z-005). The Inspector exists to show the SHAPE of every
+ * request/response, so these keys are not dropped and not blanked: they are
+ * replaced by a marker that keeps the shape readable — the field is still
+ * there, still a string, and still says how long the original was — without
+ * persisting the value into D1 or the screen.
+ *
+ *  - name-like keys      -> `[REDACTED:5 chars]`
+ *  - date of birth       -> `[REDACTED:1990]` (year only: enough to see that a
+ *                           date was sent and that the age math has an input)
+ *  - street/zip/e-mail/phone -> `[REDACTED:N chars]`
+ *  - `city`/`state` stay in clear: they carry the payload's shape (and the
+ *    Smarty/address validation story) without identifying anybody.
+ */
+const NAME_KEYS = [
+  'firstname',
+  'middlename',
+  'lastname',
+  'fullname',
+  'name',
+  'maidenname',
+  'suffix',
+]
+
+const DOB_KEYS = ['dob', 'dateofbirth', 'birthdate', 'birthday']
+
+const CONTACT_KEYS = [
+  'address',
+  'address1',
+  'address2',
+  'addressline1',
+  'addressline2',
+  'street',
+  'street1',
+  'street2',
+  'line1',
+  'line2',
+  'zip',
+  'zipcode',
+  'postalcode',
+  'email',
+  'emailaddress',
+  'phone',
+  'phonenumber',
+  'homephone',
+  'mobilephone',
+]
+
+function shapeOnly(value: string): string {
+  return `${REDACTED}:${value.length} chars`
+}
+
+function dobYear(value: string): string {
+  const y = /(\d{4})/.exec(value)
+  return y ? `${REDACTED}:${y[1]}` : shapeOnly(value)
+}
+
+function matches(key: string, list: string[]): boolean {
+  const k = key.toLowerCase().replace(/[_-]/g, '')
+  return list.some((s) => k === s || k.endsWith(s))
+}
+
 function maskString(value: string): string {
   if (!value) return value
   if (value.length <= 4) return REDACTED
@@ -49,6 +111,12 @@ export function redact(value: unknown, depth = 0): unknown {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       if (isSensitiveKey(k)) {
         out[k] = typeof v === 'string' ? maskString(v) : REDACTED
+      } else if (typeof v === 'string' && v !== '' && matches(k, NAME_KEYS)) {
+        out[k] = shapeOnly(v)
+      } else if (typeof v === 'string' && v !== '' && matches(k, DOB_KEYS)) {
+        out[k] = dobYear(v)
+      } else if (typeof v === 'string' && v !== '' && matches(k, CONTACT_KEYS)) {
+        out[k] = shapeOnly(v)
       } else {
         out[k] = redact(v, depth + 1)
       }

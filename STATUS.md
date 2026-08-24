@@ -59,7 +59,7 @@ npm --workspace worker run db:migrate
 npm run dev                      # worker :8787 + web :5173
 
 # Usar a API real da Array: preencha as duas chaves e reinicie
-cp .env.example worker/.dev.vars   # SMARTY_AUTH_ID -> appKey, SMARTY_AUTH_TOKEN -> client token
+cp worker/.dev.vars.example worker/.dev.vars   # SMARTY_AUTH_ID -> appKey, SMARTY_AUTH_TOKEN -> client token
 
 # Suíte de QA (ver docs/QA.md)
 npm --workspace worker run test

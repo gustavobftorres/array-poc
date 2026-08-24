@@ -36,7 +36,7 @@ Se você abriu este repo agora, a ordem que economiza tempo é:
 
 | Diretório | O que tem |
 |---|---|
-| `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, 65 testes vitest |
+| `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, 67 testes vitest |
 | `web/` | 8 telas React (Dashboard, Enrollment, KBA, Credit Report, Alerts, Guia de Integração, Web Components, API Inspector) |
 | `scripts/` | suítes de validação (HTTP, browser, snippets coláveis, envenenamento de KV, aritmética do relatório) |
 | `docs/` | pesquisa da API, plano, QA e os relatórios de validação por ciclo |
@@ -84,7 +84,8 @@ fato. Ela traz, num stepper com diagrama:
   `ttlInMinutes` 1–1440 é do worker);
 - o **estado real da sessão atual** ao lado de cada passo, derivado do **evento** correspondente:
   respostas de KBA aceitas, `POST /api/array/usertoken` feito pelo browser, componente realmente
-  montado no DOM, relatório pedido e relatório recebido. Uma sessão semeada mostra **1/6** — não 6/6: o `/api/seed` faz tudo no servidor, então nem KBA, nem `usertoken`, nem componente, nem o pedido do relatório contam como evento desta sessão;
+  montado **nesta aba** (o evento é escopado à aba e sai quando o componente sai do DOM — Desmontar,
+  falha do CDN ou reabrir o Playground sem nada montado), relatório pedido e relatório recebido. Uma sessão semeada mostra **1/6** — não 6/6: o `/api/seed` faz tudo no servidor, então nem KBA, nem `usertoken`, nem componente, nem o pedido do relatório contam como evento desta sessão;
 - uma tabela dos erros que você vai encontrar (`userToken` expirado, appKey ≠ 36 chars, custom
   element auto-fechado, KBA reprovada, relatório vazio recém-pedido, `displayToken` expirado,
   `appKey` fora do corpo) e onde cada um se resolve.
@@ -96,15 +97,17 @@ carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usand
 Comandos úteis:
 
 ```bash
-npm --workspace worker run test        # vitest (65 testes)
+npm --workspace worker run test        # vitest (67 testes)
 npm --workspace web run build          # tsc -b + vite build
 npm --workspace worker run typecheck   # tsc --noEmit
 npm --workspace worker run dev         # só o worker
 npm --workspace web run dev            # só o front
 ```
 
-E a suíte de validação (pré-requisitos do Chromium e o que cada script cobre em
-[`docs/QA.md`](docs/QA.md)):
+E a suíte de validação. **Pré-requisitos**: a POC tem de estar **rodando em outro terminal**
+(`npm run dev` é foreground e ocupa o terminal — os scripts falam com o worker em `:8787` e com o
+front em `:5173`), e o Chromium é o build 1194 apontado por `PW_CHROMIUM` (nunca rode
+`playwright install`). Detalhes e o que cada script cobre em [`docs/QA.md`](docs/QA.md):
 
 ```bash
 npm --workspace worker run test && npm --workspace worker run typecheck
@@ -116,14 +119,22 @@ node scripts/regression-ciclo3.mjs && node scripts/guide-check-ciclo6.mjs
 node scripts/verify-guide-ciclo7.mjs && node scripts/walkthrough-ciclo7.mjs
 node scripts/kv-poison-ciclo7.mjs && node scripts/report-audit-ciclo7.mjs 8
 node scripts/hostile-attrname-ciclo7.mjs && node scripts/step-state-ciclo7.mjs
+node scripts/regression-ciclo9.mjs
 ```
+
+**Saída esperada**: `67 passed`, typecheck e build limpos, `pass=42 fail=0` no `smoke-api.sh` e
+**`0 achado(s)` em todos os scripts `.mjs`** — inclusive o `step-state-ciclo7.mjs`, que até o ciclo
+10 saía com `1 achado(s)` conhecido (o passo 4 preso em "feito"; corrigido no ciclo 11, Z-001).
+Qualquer achado agora é regressão.
 
 ## Onde colar as chaves
 
 ```bash
-cp .env.example .env                        # referência para você
-cp worker/.dev.vars.example worker/.dev.vars # este é o que o wrangler lê
+cp worker/.dev.vars.example worker/.dev.vars   # este é o único arquivo lido em runtime
 ```
+
+Não existe `.env` na raiz nesta POC: quem lê as credenciais é o `wrangler` a partir de
+`worker/.dev.vars` (ver `worker/src/config.ts`). Um `.env` na raiz seria ignorado.
 
 Preencha `worker/.dev.vars` e **reinicie o worker**:
 
@@ -141,7 +152,7 @@ no topo do frontend sempre mostra o modo vigente (`GET /api/status`).
 Resumo do checklist de prontidão de `docs/VALIDATION_CICLO7.md`.
 
 **Vai funcionar de primeira, sem credencial nenhuma:** `npm install && npm run db:migrate &&
-npm run dev`; as 9 telas em modo mock com fixtures que fecham a própria aritmética; as suítes de
+npm run dev`; as 8 telas em modo mock com fixtures que fecham a própria aritmética; as suítes de
 validação verdes; o Guia de Integração inteiro (`curl` e TypeScript coláveis, executados contra uma
 Array falsa em `scripts/fake-array-ciclo7.mjs`); o Inspector com segredo e PII redigidos; o cache de
 `userToken` isolado por modo/appKey/baseUrl/client token.
@@ -269,8 +280,20 @@ guardado no navegador continua valendo depois de reiniciar.
 
 - O client token existe **apenas** no worker. O frontend recebe só `userToken` de curta duração.
 - SSN é gravado no D1 apenas como **últimos 4 dígitos** (`users.ssn_last4`).
-- Toda chamada a `/api/*` vai para a tabela `api_calls` com SSN e tokens **redigidos**
-  (`worker/src/redact.ts`) — visível na tela API Inspector.
+- Toda chamada a `/api/*` vai para a tabela `api_calls` com SSN, tokens **e a PII de identidade**
+  **redigidos antes da escrita** (`worker/src/redact.ts`) — é o que a tela API Inspector mostra.
+  A redação **preserva a forma e descarta o valor**, para o Inspector continuar servindo ao que ele
+  existe (mostrar o formato de cada request/response) sem persistir PII em claro:
+  `"firstName":"[REDACTED]:5 chars"`, `"dob":"[REDACTED]:1990"` (só o ano),
+  `"ssn":"[REDACTED]:8877"` (4 últimos), rua/CEP/e-mail/telefone só com o tamanho, e
+  `city`/`state` em claro (não identificam ninguém e mantêm a forma do endereço legível).
+  Consequência prática: plugar uma identidade de **sandbox real** não deixa nome, data de
+  nascimento nem endereço em claro no SQLite local nem na tela. A própria tela do Inspector
+  explica isso.
+- Fora do log, a tabela `users` (dados da aplicação, não auditoria) guarda nome, `dob` e o endereço
+  do consumidor em claro — é o que as telas listam e o que a aritmética de idade usa —, e o SSN
+  **só** como últimos 4 dígitos. Continua sendo um SQLite de desenvolvimento local: não é onde
+  colocar PII de produção.
 
 ## Limitações conhecidas neste ambiente
 

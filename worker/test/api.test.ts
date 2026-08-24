@@ -208,7 +208,13 @@ describe('mock registry (unknown identifiers are rejected)', () => {
 
 describe('oversized payloads (regression: inspector 500)', () => {
   it('rejects a huge enrollment and keeps GET /api/inspector at 200', async () => {
-    const big = await post('/api/array/user', { ...DEMO, firstName: 'A'.repeat(25_000) })
+    // `firstName` is redacted to its shape (Z-005), so the bulk that exercises
+    // the truncation envelope has to be a non-PII field.
+    const big = await post('/api/array/user', {
+      ...DEMO,
+      firstName: 'A'.repeat(25_000),
+      notes: 'B'.repeat(25_000),
+    })
     expect(big.status).toBe(400)
 
     const res = await call('/api/inspector?limit=50')
@@ -218,6 +224,8 @@ describe('oversized payloads (regression: inspector 500)', () => {
     // The oversized row is stored as a valid JSON envelope, not broken text.
     const envelope = json.calls.map((c) => c.request).find((r) => r && (r as { _truncated?: boolean })._truncated)
     expect(envelope).toBeTruthy()
+    // And the 25k-char name never reaches the row, not even inside the preview.
+    expect(JSON.stringify(json)).not.toContain('AAAAAAAAAA')
   })
 
   it('does not break the inspector when a row holds invalid JSON', async () => {

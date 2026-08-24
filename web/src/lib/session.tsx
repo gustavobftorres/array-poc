@@ -21,6 +21,14 @@ export interface Session {
   componentMountedAt: string
   /** Tag of that component, for the "nesta sessão" line. */
   componentTag: string
+  /**
+   * Which browser TAB mounted it (Z-001). `componentMountedAt` lives in
+   * localStorage, which is shared by every tab of the origin, so a mount in one
+   * tab used to light up step 4 in a brand-new tab where the CDN is blocked and
+   * nothing ever mounted. The id below comes from `sessionStorage` (per tab,
+   * survives reload), so step 4 only counts a mount that happened HERE.
+   */
+  componentMountedTab: string
   /** How the current userToken was obtained: KBA, usertoken route or /api/seed. */
   userTokenSource: '' | 'kba' | 'usertoken' | 'seed'
   /** POST /report/v2 returned reportKey + displayToken in this session. */
@@ -39,11 +47,37 @@ const EMPTY: Session = {
   userTokenMintedAt: '',
   componentMountedAt: '',
   componentTag: '',
+  componentMountedTab: '',
   userTokenSource: '',
   reportOrderedAt: '',
   reportFetchedAt: '',
 }
 const KEY = 'array-poc.session'
+const TAB_KEY = 'array-poc.tab'
+
+/**
+ * Stable id for THIS tab: written once into `sessionStorage` (per tab, kept
+ * across reloads, never shared with another tab). Used by the Guia to decide
+ * whether the mounted-component event happened in the tab being looked at.
+ */
+export function tabId(): string {
+  try {
+    const cached = sessionStorage.getItem(TAB_KEY)
+    if (cached) return cached
+    const id = `tab-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+    sessionStorage.setItem(TAB_KEY, id)
+    return id
+  } catch {
+    return 'tab-nostorage'
+  }
+}
+
+/** The event fields of step 4, cleared together (unmount / failed CDN load). */
+export const NO_COMPONENT_MOUNTED = {
+  componentMountedAt: '',
+  componentTag: '',
+  componentMountedTab: '',
+} as const
 
 interface Ctx {
   session: Session

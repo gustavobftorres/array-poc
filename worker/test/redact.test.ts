@@ -13,8 +13,45 @@ describe('redaction', () => {
     expect(json).not.toContain('666230560')
     expect(json).not.toContain('SECRET-TOKEN')
     expect(json).not.toContain('ABCD-EFGH-1234')
-    expect(json).toContain('BANKER')
+    // Z-005: identity PII is redacted keeping the SHAPE, never the value.
+    expect(json).not.toContain('BANKER')
+    expect(json).toContain('[REDACTED]:6 chars')
     expect(json).toContain(REDACTED)
+  })
+
+  it('redacts identity PII keeping the shape (Z-005)', () => {
+    const out = redact({
+      firstName: 'Zed',
+      lastName: 'Redact',
+      dob: '1990-05-05',
+      emailAddress: 'zed@example.com',
+      phoneNumber: '5551234567',
+      address: {
+        address1: '123 Main St',
+        address2: 'Apt 4',
+        city: 'Austin',
+        state: 'TX',
+        zipCode: '78701',
+      },
+    }) as Record<string, any>
+    expect(out.firstName).toBe('[REDACTED]:3 chars')
+    expect(out.lastName).toBe('[REDACTED]:6 chars')
+    expect(out.dob).toBe('[REDACTED]:1990')
+    expect(out.emailAddress).toBe('[REDACTED]:15 chars')
+    expect(out.phoneNumber).toBe('[REDACTED]:10 chars')
+    expect(out.address.address1).toBe('[REDACTED]:11 chars')
+    expect(out.address.address2).toBe('[REDACTED]:5 chars')
+    // City/state stay readable: payload shape without identifying anybody.
+    expect(out.address.city).toBe('Austin')
+    expect(out.address.state).toBe('TX')
+    expect(out.address.zipCode).toBe('[REDACTED]:5 chars')
+    const json = JSON.stringify(out)
+    for (const v of ['Zed', 'Redact', '1990-05-05', '123 Main St', 'zed@example.com', '78701'])
+      expect(json).not.toContain(v)
+  })
+
+  it('leaves empty identity fields alone (shape stays visible)', () => {
+    expect(redact({ firstName: '', dob: '' })).toEqual({ firstName: '', dob: '' })
   })
 
   it('masks bare SSN-looking strings in free text', () => {

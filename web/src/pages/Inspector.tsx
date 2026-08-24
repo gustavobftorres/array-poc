@@ -31,8 +31,16 @@ export function Inspector() {
         <div>
           <h1>API Inspector</h1>
           <p>
-            Toda chamada a <code>/api/*</code> é gravada na tabela <code>api_calls</code> do D1, com SSN e tokens
-            redigidos antes da escrita. Latência em ms.
+            Toda chamada a <code>/api/*</code> é gravada na tabela <code>api_calls</code> do D1, com SSN, tokens
+            <strong> e a PII de identidade</strong> redigidos antes da escrita. Latência em ms.
+          </p>
+          <p className="hint" style={{ marginTop: 8 }}>
+            <strong>O que você vê aqui não é o payload literal.</strong> Para o Inspector servir ao seu propósito — mostrar
+            a <em>forma</em> de cada request/response — a redação preserva a forma e joga fora o valor:{' '}
+            <code>"firstName":"[REDACTED]:5 chars"</code>, <code>"dob":"[REDACTED]:1990"</code> (só o ano),{' '}
+            <code>"ssn":"[REDACTED]:8877"</code> (4 últimos), rua/CEP/e-mail/telefone só com o tamanho, e{' '}
+            <code>city</code>/<code>state</code> em claro. Nada disso é gravado em claro no D1, então colar uma
+            identidade de sandbox real aqui não deixa nome, data de nascimento nem endereço no SQLite local.
           </p>
         </div>
         <div className="row">
