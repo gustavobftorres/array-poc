@@ -44,10 +44,15 @@ function loadScript(src: string): Promise<void> {
 }
 
 /** Placeholder used when we have no real 36-char appKey to put in the snippet. */
-export const APP_KEY_PLACEHOLDER = '<SEU_APP_KEY_36_CHARS>'
+export const APP_KEY_PLACEHOLDER = 'SEU_APP_KEY_36_CHARS'
 
-/** Placeholder used when the session has no userToken to put in the snippet. */
-export const USER_TOKEN_PLACEHOLDER = '<TOKEN_DO_SEU_BACKEND>'
+/**
+ * Placeholder used when the session has no userToken to put in the snippet.
+ * No `<>` around it: inside an attribute the placeholder is HTML-escaped
+ * (`&lt;…&gt;`) while the explanatory comment has the brackets stripped, so a
+ * find-and-replace by the dev matched neither of the two (X-010).
+ */
+export const USER_TOKEN_PLACEHOLDER = 'SEU_USER_TOKEN_AQUI'
 
 /** Array's embed loader validates `appKey.length === 36`. */
 export function isValidAppKey(appKey: string): boolean {
@@ -59,8 +64,26 @@ export function isValidAppKey(appKey: string): boolean {
  * an attribute at all, so it is dropped instead of producing broken markup.
  */
 const ATTR_NAME_RE = /^[A-Za-z][A-Za-z0-9_:.-]*$/
-export function isValidAttrName(name: string): boolean {
+
+/**
+ * Names that are perfectly legal HTML but turn the snippet into an attack:
+ * `onload` passed `isValidAttrName` and came out as `onload="…"`, an executable
+ * inline handler inside the artefact the dev pastes into their page (X-007).
+ * `style` and `srcdoc` are refused for the same reason (CSS injection and an
+ * inline document with its own scripts).
+ */
+export function isDangerousAttrName(name: string): boolean {
+  const n = name.trim().toLowerCase()
+  return n.startsWith('on') || n === 'style' || n === 'srcdoc'
+}
+
+/** Syntactically valid HTML attribute name (says nothing about safety). */
+export function isWellFormedAttrName(name: string): boolean {
   return ATTR_NAME_RE.test(name)
+}
+
+export function isValidAttrName(name: string): boolean {
+  return isWellFormedAttrName(name) && !isDangerousAttrName(name)
 }
 
 /**
@@ -137,7 +160,8 @@ export function buildSnippet(
     })
     .join('')
 
-  const dropped = Object.keys(attrs).filter((k) => !isValidAttrName(k))
+  const malformed = Object.keys(attrs).filter((k) => !isWellFormedAttrName(k))
+  const blocked = Object.keys(attrs).filter((k) => isWellFormedAttrName(k) && isDangerousAttrName(k))
 
   const appKeyNote = isValidAppKey(appKey)
     ? `<!-- appKey de exemplo (modo MOCK, 36 chars). Troque pelo appKey da sua conta Array. -->`
@@ -151,7 +175,8 @@ export function buildSnippet(
         '        (segredo — nunca vai ao browser) e devolve o userToken ao seu frontend. -->',
         sessionToken
           ? `<!-- 2) o valor abaixo é o token DESTA sessão da POC e expira em ~${ttl} min\n` +
-            '        (campo expiresAt da resposta) — não versione nem publique esse valor. -->'
+            '        (expiresAt = campo calculado por ESTA POC a partir do ttlInMinutes;\n' +
+            '        a resposta da Array documentada traz ttlInMinutes) — não versione esse valor. -->'
           : `<!-- 2) esta sessão da POC não tem userToken: o atributo sai com o placeholder\n` +
             `        ${escapeComment(USER_TOKEN_PLACEHOLDER)}. Sem token o componente não busca dados. -->`,
         '<!-- 3) injete o atributo a cada render (server-side render ou',
@@ -159,9 +184,14 @@ export function buildSnippet(
       ].join('\n')
     : ''
 
-  const droppedNote = dropped.length
-    ? `\n<!-- atributo(s) ignorado(s) por nome inválido em HTML: ${escapeComment(dropped.join(', '))} -->`
-    : ''
+  const droppedNote =
+    (malformed.length
+      ? `\n<!-- atributo(s) ignorado(s) por nome inválido em HTML: ${escapeComment(malformed.join(', '))} -->`
+      : '') +
+    (blocked.length
+      ? `\n<!-- atributo(s) RECUSADO(s) por serem executáveis no HTML que você vai colar: ` +
+        `${escapeComment(blocked.join(', '))} — on*/style/srcdoc não entram no snippet. -->`
+      : '')
 
   return [
     appKeyNote + droppedNote + tokenNote,
@@ -192,9 +222,15 @@ export interface ArrayComponentProps {
   /** What the component would render — shown when the CDN is unreachable. */
   describe?: string
   expects?: string[]
+  /**
+   * Called when the custom element is really appended to the DOM (runtime and
+   * bundle loaded). The Guia de Integração uses this — and not the presence of
+   * a userToken — to say that step 4 happened (X-006).
+   */
+  onMounted?: (tag: string) => void
 }
 
-export function ArrayComponent({ cdn, tag, attrs, appKey, describe, expects }: ArrayComponentProps) {
+export function ArrayComponent({ cdn, tag, attrs, appKey, describe, expects, onMounted }: ArrayComponentProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [state, setState] = useState<LoadState>('idle')
   const [error, setError] = useState<string>('')
@@ -237,7 +273,9 @@ export function ArrayComponent({ cdn, tag, attrs, appKey, describe, expects }: A
       }
     }
     host.appendChild(el)
+    onMounted?.(tag)
     return () => host.replaceChildren()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, tag, attrKey, attrs])
 
   return (

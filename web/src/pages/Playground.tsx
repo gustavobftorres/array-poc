@@ -3,8 +3,9 @@ import {
   APP_KEY_PLACEHOLDER,
   ArrayComponent,
   buildSnippet,
+  isDangerousAttrName,
   isValidAppKey,
-  isValidAttrName,
+  isWellFormedAttrName,
   useArrayEvents,
   USER_TOKEN_PLACEHOLDER,
 } from '../components/ArrayComponent'
@@ -220,13 +221,18 @@ export function Playground() {
     userTokenTtlMinutes: token.data?.ttlInMinutes ?? 60,
     tokenEndpoint: 'POST /authenticate/v2/usertoken (via POST /api/array/usertoken nesta POC)',
   })
-  const invalidAttrs = Object.keys(attrs).filter((k) => !isValidAttrName(k))
+  const malformedAttrs = Object.keys(attrs).filter((k) => !isWellFormedAttrName(k))
+  const blockedAttrs = Object.keys(attrs).filter((k) => isWellFormedAttrName(k) && isDangerousAttrName(k))
 
   const mint = async () => {
     if (!session.clientKey) return
     const res = await token.run(() => api.userToken({ clientKey: session.clientKey, ttlInMinutes: 60 }))
     if (res?.userToken) {
-      patch({ userToken: res.userToken })
+      patch({
+        userToken: res.userToken,
+        userTokenMintedAt: new Date().toISOString(),
+        userTokenSource: 'usertoken',
+      })
       setAttrs((a) => ({ ...a, ...(a.userToken !== undefined ? { userToken: res.userToken } : {}) }))
     }
   }
@@ -294,8 +300,18 @@ export function Playground() {
                   // A name that is not a legal HTML attribute name cannot be
                   // emitted at all — refuse it here instead of shipping broken
                   // markup in the snippet (W-002).
-                  if (!isValidAttrName(k)) {
+                  if (!isWellFormedAttrName(k)) {
                     setAttrError(`"${k}" não é um nome de atributo HTML válido (use letras, dígitos, - _ . :).`)
+                    return
+                  }
+                  // `onload` IS a legal attribute name — and the snippet is the
+                  // artefact the dev pastes into their page, so an executable
+                  // handler is refused at the door (X-007).
+                  if (isDangerousAttrName(k)) {
+                    setAttrError(
+                      `"${k}" é executável no HTML colado (on*/style/srcdoc) e não entra no snippet. ` +
+                        'Os componentes da Array recebem dados por atributos comuns e emitem array-event.',
+                    )
                     return
                   }
                   setAttrError('')
@@ -309,9 +325,18 @@ export function Playground() {
               </button>
             </div>
             {attrError && <p className="hint danger" style={{ marginTop: 8 }}>{attrError}</p>}
-            {invalidAttrs.length > 0 && (
+            {malformedAttrs.length > 0 && (
               <p className="hint danger" style={{ marginTop: 8 }}>
-                Nome(s) inválido(s) e por isso ignorado(s) no snippet: <code>{invalidAttrs.join(', ')}</code>.
+                Nome(s) inválido(s) em HTML e por isso ignorado(s) no snippet:{' '}
+                <code>{malformedAttrs.join(', ')}</code>.
+              </p>
+            )}
+            {blockedAttrs.length > 0 && (
+              <p className="hint danger" style={{ marginTop: 8 }}>
+                Nome(s) recusado(s) por serem executáveis no HTML que você vai colar:{' '}
+                <code>{blockedAttrs.join(', ')}</code>. <code>on*</code> é handler inline,{' '}
+                <code>style</code> é CSS injetado e <code>srcdoc</code> é um documento inteiro — nenhum entra no
+                snippet nem no componente montado (X-007).
               </p>
             )}
             {!session.userToken && needsUserToken && (
@@ -374,6 +399,9 @@ export function Playground() {
                 appKey={appKey}
                 describe={spec.describe}
                 expects={spec.expects}
+                onMounted={(tag) =>
+                  patch({ componentMountedAt: new Date().toISOString(), componentTag: tag })
+                }
               />
             ) : (
               <div className="component-host">

@@ -25,11 +25,22 @@ export function Dashboard() {
   const runSeed = async () => {
     const res = await seed.run(() => api.seed())
     if (res) {
+      // Seeding mints the token server-side in one shot: it does NOT mean the
+      // KBA was answered, that the browser called /usertoken or that any
+      // component was mounted. Clearing these keeps /integracao honest (X-006).
       patch({
         clientKey: String(res.clientKey ?? ''),
         userToken: String(res.userToken ?? ''),
         reportKey: String(res.reportKey ?? ''),
         displayToken: String(res.displayToken ?? ''),
+        authToken: '',
+        kbaAuthenticatedAt: '',
+        userTokenMintedAt: '',
+        componentMountedAt: '',
+        componentTag: '',
+        userTokenSource: 'seed',
+        reportOrderedAt: new Date().toISOString(),
+        reportFetchedAt: '',
       })
       reloadStatus()
       loadUsers()

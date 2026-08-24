@@ -8,9 +8,41 @@ export interface Session {
   authToken: string
   reportKey: string
   displayToken: string
+  /**
+   * Timestamps of the EVENTS the Guia de Integração reports as "feito nesta
+   * sessão". Deriving each step from `userToken` alone made a seeded session
+   * show 4/4 without a single KBA answer or a mounted component (X-006).
+   */
+  /** KBA answers accepted by POST /authenticate/v2 (userToken came from there). */
+  kbaAuthenticatedAt: string
+  /** The browser called POST /api/array/usertoken and got a token back. */
+  userTokenMintedAt: string
+  /** A web component was actually mounted in the DOM (CDN reachable). */
+  componentMountedAt: string
+  /** Tag of that component, for the "nesta sessão" line. */
+  componentTag: string
+  /** How the current userToken was obtained: KBA, usertoken route or /api/seed. */
+  userTokenSource: '' | 'kba' | 'usertoken' | 'seed'
+  /** POST /report/v2 returned reportKey + displayToken in this session. */
+  reportOrderedAt: string
+  /** GET /report/v2 returned a populated report in this session. */
+  reportFetchedAt: string
 }
 
-const EMPTY: Session = { clientKey: '', userToken: '', authToken: '', reportKey: '', displayToken: '' }
+const EMPTY: Session = {
+  clientKey: '',
+  userToken: '',
+  authToken: '',
+  reportKey: '',
+  displayToken: '',
+  kbaAuthenticatedAt: '',
+  userTokenMintedAt: '',
+  componentMountedAt: '',
+  componentTag: '',
+  userTokenSource: '',
+  reportOrderedAt: '',
+  reportFetchedAt: '',
+}
 const KEY = 'array-poc.session'
 
 interface Ctx {

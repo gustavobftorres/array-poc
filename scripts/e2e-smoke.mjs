@@ -114,15 +114,16 @@ async function main() {
   await go('/integracao', 'Guia de Integração', '16-integracao')
   {
     const t = await page.locator('body').innerText()
-    for (const must of ['/user/v2', '/authenticate/v2', '/authenticate/v2/usertoken', 'appKey', 'userToken', 'SERVIDOR', 'BROWSER']) {
+    // O guia vai do consumidor ao relatório (6 passos desde o ciclo 6 / X-003).
+    for (const must of ['/user/v2', '/authenticate/v2', '/authenticate/v2/usertoken', '/report/v2', 'appKey', 'userToken', 'SERVIDOR', 'BROWSER']) {
       if (!t.includes(must)) note('P1', `Integração: a tela não menciona ${must}`)
     }
     const steps = await page.locator('.step').count()
-    if (steps !== 4) note('P1', `Integração: esperava 4 passos, achei ${steps}`)
+    if (steps !== 6) note('P1', `Integração: esperava 6 passos, achei ${steps}`)
     const svg = await page.locator('.flow-diagram svg').count()
     if (!svg) note('P1', 'Integração: diagrama do fluxo ausente')
     const done = await page.locator('.step-state.ok').count()
-    console.log(`Integração: passos com dado real da sessão = ${done}/4`)
+    console.log(`Integração: passos com evento real da sessão = ${done}/6`)
     // alternar curl/TypeScript no passo 1
     const tsBtn = page.getByRole('button', { name: 'TypeScript' }).first()
     if (await tsBtn.count()) {

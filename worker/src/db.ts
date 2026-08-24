@@ -46,9 +46,12 @@ export async function insertUser(
   )
 }
 
-export async function listUsers(db: D1Database, limit = 50) {
+export async function listUsers(db: D1Database, limit = 50, offset = 0) {
   const res = await safe('listUsers', () =>
-    db.prepare(`SELECT * FROM users ORDER BY created_at DESC LIMIT ?`).bind(limit).all(),
+    db
+      .prepare(`SELECT * FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .bind(limit, offset)
+      .all(),
   )
   return (res?.results ?? []) as unknown as Record<string, unknown>[]
 }

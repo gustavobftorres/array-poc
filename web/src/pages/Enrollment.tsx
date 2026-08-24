@@ -82,7 +82,17 @@ export function Enrollment() {
       address: { street: form.street.trim(), city: form.city.trim(), state: form.state.toUpperCase(), zip: form.zip },
     }
     const res = await req.run(() => api.createUser(payload))
-    if (res?.clientKey) patch({ clientKey: res.clientKey, userToken: '', authToken: '' })
+    if (res?.clientKey)
+      patch({
+        clientKey: res.clientKey,
+        userToken: '',
+        authToken: '',
+        kbaAuthenticatedAt: '',
+        userTokenMintedAt: '',
+        componentMountedAt: '',
+        componentTag: '',
+        userTokenSource: '',
+      })
   }
 
   return (

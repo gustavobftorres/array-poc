@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import app, { calendarAge, isFutureDate, tokenCacheKey, tokenCacheScope, wantsRefresh } from '../src/index'
 import { fakeD1 } from './fakeD1'
 import { MOCK_BASE_SCORE } from '../src/array/mock'
+import { monthsAgoISO } from '../src/dates'
 
 let db: ReturnType<typeof fakeD1>
 let kv: Map<string, string>
@@ -589,5 +590,99 @@ describe('mock registry coherence on GET /report (W-010)', () => {
 
     const bad = await call(`/api/array/report?reportKey=${order.reportKey}&displayToken=${order.displayToken}&clientKey=NAO-EXISTE`)
     expect(bad.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ciclo 6 — X-004, X-005, X-008, X-011, X-013
+// ---------------------------------------------------------------------------
+
+describe('report aggregates stay consistent with their labels', () => {
+  const clientKeys: string[] = []
+
+  it('counts only hard inquiries inside the 6-month window (X-004)', async () => {
+    const cutoff = monthsAgoISO(6)
+    for (let i = 0; i < 14; i++) {
+      const u = (await (
+        await post('/api/array/user', { ...DEMO, firstName: `T${i}` })
+      ).json()) as { clientKey: string }
+      clientKeys.push(u.clientKey)
+      const o = (await (
+        await post('/api/array/report', { clientKey: u.clientKey, productCode: 'credmo3bReportScore' })
+      ).json()) as { reportKey: string; displayToken: string }
+      const r = (await (
+        await call(`/api/array/report?reportKey=${o.reportKey}&displayToken=${o.displayToken}`)
+      ).json()) as {
+        inquiries: { type: string; date: string }[]
+        summary: { inquiries6mo: number; oldestAccountYears: number }
+        tradelines: { opened: string }[]
+      }
+      const expected = r.inquiries.filter((q) => q.type === 'Hard' && q.date >= cutoff).length
+      expect(r.summary.inquiries6mo).toBe(expected)
+      // nothing older than the window may be counted
+      expect(r.inquiries.filter((q) => q.type === 'Hard' && q.date < cutoff).length + expected).toBeGreaterThanOrEqual(
+        r.summary.inquiries6mo,
+      )
+      // X-005: oldest account age by calendar, never a bare year subtraction
+      const oldest = [...r.tradelines.map((t) => t.opened)].sort()[0]
+      expect(r.summary.oldestAccountYears).toBe(Math.max(1, calendarAge(oldest)))
+    }
+  })
+})
+
+describe('userToken cache scope is read strictly (X-008/X-011)', () => {
+  it('treats a stored value without scope as a miss', async () => {
+    const u = (await (await post('/api/array/user', DEMO)).json()) as { clientKey: string }
+    const key = tokenCacheKey({ mode: 'mock', appKey: '', baseUrl: 'https://sandbox.array.io/api' }, u.clientKey, 60)
+    kv.set(
+      key,
+      JSON.stringify({
+        userToken: 'POISONED-B',
+        clientKey: u.clientKey,
+        ttlInMinutes: 60,
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    )
+    const res = (await (
+      await post('/api/array/usertoken', { clientKey: u.clientKey, ttlInMinutes: 60 })
+    ).json()) as { userToken: string; cached?: boolean }
+    expect(res.userToken).not.toBe('POISONED-B')
+    expect(res.cached).toBeFalsy()
+  })
+
+  it('includes a hash of the client token in the scope (X-011)', () => {
+    const base = { mode: 'sandbox', appKey: 'APP', baseUrl: 'https://sandbox.array.io/api' }
+    expect(tokenCacheScope({ ...base, clientToken: 'OLD' })).not.toBe(
+      tokenCacheScope({ ...base, clientToken: 'NEW' }),
+    )
+    // and the token itself never lands in the key
+    expect(tokenCacheKey({ ...base, clientToken: 'SUPERSECRETTOKEN123' }, 'CK', 60)).not.toContain(
+      'SUPERSECRETTOKEN123',
+    )
+  })
+})
+
+describe('GET /api/array/users pagination (X-013)', () => {
+  it('honours limit/offset and reports the total', async () => {
+    for (let i = 0; i < 5; i++) await post('/api/array/user', { ...DEMO, firstName: `P${i}` })
+    const page = (await (await call('/api/array/users?limit=2&offset=1')).json()) as {
+      users: unknown[]
+      total: number
+      limit: number
+      offset: number
+    }
+    expect(page.limit).toBe(2)
+    expect(page.offset).toBe(1)
+    expect(page.users.length).toBeLessThanOrEqual(2)
+    expect(typeof page.total).toBe('number')
+    const q = db.statements.filter((st) => /FROM users ORDER BY created_at DESC LIMIT \? OFFSET \?/i.test(st.sql))
+    expect(q.length).toBeGreaterThan(0)
+    expect(q[q.length - 1].params).toEqual([2, 1])
+    const bad = (await (await call('/api/array/users?limit=abc&offset=-5')).json()) as {
+      limit: number
+      offset: number
+    }
+    expect(bad.limit).toBe(50)
+    expect(bad.offset).toBe(0)
   })
 })

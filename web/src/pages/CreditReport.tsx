@@ -95,8 +95,19 @@ export function CreditReportPage() {
   const run = async () => {
     const o = await order.run(() => api.orderReport({ clientKey: clientKey.trim(), productCode }))
     if (!o) return
-    patch({ clientKey: clientKey.trim(), reportKey: o.reportKey, displayToken: o.displayToken })
-    await report.run(() => api.getReport({ reportKey: o.reportKey, displayToken: o.displayToken, clientKey: clientKey.trim() }))
+    patch({
+      clientKey: clientKey.trim(),
+      reportKey: o.reportKey,
+      displayToken: o.displayToken,
+      reportOrderedAt: new Date().toISOString(),
+      reportFetchedAt: '',
+    })
+    const got = await report.run(() =>
+      api.getReport({ reportKey: o.reportKey, displayToken: o.displayToken, clientKey: clientKey.trim() }),
+    )
+    // Passos 5 e 6 do Guia são eventos distintos: pedir o relatório e recebê-lo
+    // preenchido (ele pode voltar vazio por alguns segundos).
+    if (got) patch({ reportFetchedAt: new Date().toISOString() })
   }
 
   // A reload keeps clientKey/reportKey/displayToken in localStorage, so the
@@ -111,13 +122,17 @@ export function CreditReportPage() {
       displayToken: session.displayToken,
       productCode,
     })
-    void report.run(() =>
-      api.getReport({
-        reportKey: session.reportKey,
-        displayToken: session.displayToken,
-        clientKey: session.clientKey || undefined,
-      }),
-    )
+    void report
+      .run(() =>
+        api.getReport({
+          reportKey: session.reportKey,
+          displayToken: session.displayToken,
+          clientKey: session.clientKey || undefined,
+        }),
+      )
+      .then((got) => {
+        if (got) patch({ reportFetchedAt: new Date().toISOString() })
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.reportKey, session.displayToken])
 

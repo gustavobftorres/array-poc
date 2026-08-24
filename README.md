@@ -43,15 +43,27 @@ Enrollment → KBA → Credit Report → Alerts → **Guia de Integração** →
 A tela **Guia de Integração** é a única que *prescreve* a integração em vez de mostrá-la depois do
 fato. Ela traz, num stepper com diagrama:
 
-- o encadeamento das 4 chamadas: `POST /user/v2` → `GET`+`POST /authenticate/v2` →
-  `POST /authenticate/v2/usertoken` → atributo `userToken` no web component;
+- o encadeamento das **6 chamadas**: `POST /user/v2` → `GET`+`POST /authenticate/v2` →
+  `POST /authenticate/v2/usertoken` → atributo `userToken` no web component →
+  `POST /report/v2` → `GET /report/v2` (com o retry de 3 s, porque o relatório não sai pronto) e
+  `PUT /report/v2` para renovar o `displayToken`;
 - a **fronteira servidor/browser** desenhada: o *client token* nunca cruza; o `appKey` (público) e o
   `userToken` (curta duração) são os únicos valores que vão ao browser;
 - por passo: o que **o seu backend** precisa implementar, o `curl` e o equivalente em **TypeScript**
-  (servidor ou browser, conforme o passo);
-- o **estado real da sessão atual** ao lado de cada passo (feito/pendente, com o valor obtido);
+  (servidor ou browser, conforme o passo). Os `curl` são **coláveis**: segredo em variável de
+  ambiente com aspas duplas, aviso de segredo em linha de comentário própria (nunca dentro do valor
+  de um header) e corpo JSON por heredoc, sempre com `appKey` — os mesmos campos que o
+  `ArrayClient` do worker envia. `scripts/guide-check-ciclo6.mjs` executa cada um contra o worker
+  local e compila cada snippet TypeScript com `tsc --strict`;
+- por passo, o selo **verificado / `// UNVERIFIED`**: o que veio de fonte de primeira mão e o que é
+  inferência desta POC (ex.: `expiresAt` é campo calculado aqui, não da Array; o clamp de
+  `ttlInMinutes` 1–1440 é do worker);
+- o **estado real da sessão atual** ao lado de cada passo, derivado do **evento** correspondente:
+  respostas de KBA aceitas, `POST /api/array/usertoken` feito pelo browser, componente realmente
+  montado no DOM, relatório pedido e relatório recebido. Uma sessão semeada mostra 2/6 — não 6/6;
 - uma tabela dos erros que você vai encontrar (`userToken` expirado, appKey ≠ 36 chars, custom
-  element auto-fechado, KBA reprovada) e onde cada um se resolve.
+  element auto-fechado, KBA reprovada, relatório vazio recém-pedido, `displayToken` expirado,
+  `appKey` fora do corpo) e onde cada um se resolve.
 
 Com um `clientKey` na sessão (seed ou enrollment), as telas de **KBA, Credit Report e Alerts
 carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usando o
@@ -60,7 +72,7 @@ carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usand
 Comandos úteis:
 
 ```bash
-npm --workspace worker run test        # vitest (58 testes)
+npm --workspace worker run test        # vitest (62 testes)
 npm --workspace web run build          # tsc -b + vite build
 npm --workspace worker run typecheck   # tsc --noEmit
 npm --workspace worker run dev         # só o worker
@@ -111,7 +123,7 @@ Aliases com os nomes reais também funcionam e têm prioridade menor:
 | `POST /api/seed` | cria consumidor demo + token + relatório + alertas |
 | `POST /api/array/user` | `POST /user/v2` (enrollment → `clientKey`) |
 | `GET /api/array/user` | `GET /user/v2` (resolve userId por `x-credmo-user-token`) |
-| `GET /api/array/users` | lista o D1 local |
+| `GET /api/array/users` | lista o D1 local (`?limit=` 1–200, default 50, `?offset=`; devolve `total`) |
 | `GET /api/array/authenticate` | `GET /authenticate/v2` (perguntas KBA + `authToken`) |
 | `POST /api/array/authenticate` | `POST /authenticate/v2` (respostas → `userToken`) |
 | `POST /api/array/usertoken` | `POST /authenticate/v2/usertoken` (token dos componentes) |
@@ -189,6 +201,11 @@ egresso**. Consequências:
   depois, elemento **com tag de fechamento** (custom element não é void) e o listener de
   `array-event`. Em modo mock o `appKey` é um placeholder de 36 caracteres
   (`MOCK0000-…`) — o loader da Array valida `appKey.length === 36`; troque pelo seu.
+  Todo valor de atributo é escapado e todo nome é validado; nomes **executáveis** no HTML colado
+  (`on*`, `style`, `srcdoc`) são recusados na entrada e não entram nem no snippet nem no componente
+  montado — `onload` é um nome HTML legal e viraria handler inline no arquivo do usuário. Sem
+  `userToken` na sessão o atributo sai com `SEU_USER_TOKEN_AQUI` (sem `<>`, para o find-and-replace
+  do dev casar com o comentário).
 - O Playground marca por componente o quanto a informação é confiável: tag verificada,
   `// UNVERIFIED` (Ads, cujo nome de tag é inferido) ou não documentado (disputas, que não têm
   componente nem endpoint em nenhuma fonte acessível). Alertas/monitoring/scoretracker têm

@@ -127,31 +127,11 @@ const addressSchema = z.object({
   zip: z.string().regex(/^\d{5}(-\d{4})?$/, 'zip must be 5 or 9 digits'),
 })
 
-/** Today in UTC as `[y, m, d]` — the calendar, not a millisecond count. */
-function todayParts(now = new Date()): [number, number, number] {
-  return [now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTCDate()]
-}
-
-/**
- * Whole years between `dob` (YYYY-MM-DD) and today, by CALENDAR.
- * Dividing milliseconds by an average year (365.25 d) made the same consumer
- * pass or fail depending on the hour of the day: somebody turning 18 today was
- * 17.9986 at midnight and 18.0008 in the evening (W-006).
- */
-export function calendarAge(dob: string, now = new Date()): number {
-  const [y, m, d] = dob.split('-').map(Number)
-  const [ty, tm, td] = todayParts(now)
-  let age = ty - y
-  if (tm < m || (tm === m && td < d)) age -= 1
-  return age
-}
-
-/** True when `dob` is strictly after today's calendar date (UTC). */
-export function isFutureDate(dob: string, now = new Date()): boolean {
-  const [ty, tm, td] = todayParts(now)
-  const today = `${ty}-${String(tm).padStart(2, '0')}-${String(td).padStart(2, '0')}`
-  return dob > today
-}
+// Calendar arithmetic lives in ./dates so the fixtures can use the very same
+// rule (X-005). Re-exported here because the tests and older call sites import
+// it from the entrypoint.
+export { calendarAge, isFutureDate } from './dates'
+import { calendarAge, isFutureDate } from './dates'
 
 /**
  * A real calendar date in the past, with a plausible adult age.
@@ -292,9 +272,21 @@ app.get('/api/array/user', async (c) => {
   }
 })
 
+/** Positive integer query param with a default and a hard ceiling (X-013). */
+function intParam(raw: string | undefined, def: number, min: number, max: number): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return def
+  return Math.min(max, Math.max(min, n))
+}
+
 app.get('/api/array/users', async (c) => {
-  const users = c.env?.DB ? await db.listUsers(c.env.DB) : []
-  return c.json({ users })
+  // The UI paginated but the route still shipped every row (X-013): with 34
+  // users the payload carried 34. `limit`/`offset` make the page real.
+  const limit = intParam(c.req.query('limit'), 50, 1, 200)
+  const offset = intParam(c.req.query('offset'), 0, 0, 100_000)
+  const users = c.env?.DB ? await db.listUsers(c.env.DB, limit, offset) : []
+  const total = c.env?.DB ? await db.countUsers(c.env.DB) : 0
+  return c.json({ users, total, limit, offset })
 })
 
 app.get('/api/array/authenticate', async (c) => {
@@ -356,12 +348,28 @@ export function wantsRefresh(raw: string | undefined | null): boolean {
  * The requested TTL is part of the identity too, so asking for 1440 minutes
  * never silently receives a 60-minute token back (W-007).
  */
-export function tokenCacheScope(cfg: { mode: string; appKey: string; baseUrl: string }): string {
-  return `${cfg.mode}|${cfg.appKey || 'no-appkey'}|${cfg.baseUrl}`
+export function tokenCacheScope(cfg: {
+  mode: string
+  appKey: string
+  baseUrl: string
+  clientToken?: string
+}): string {
+  return `${cfg.mode}|${cfg.appKey || 'no-appkey'}|${cfg.baseUrl}|ct${shortHash(cfg.clientToken ?? '')}`
+}
+
+/**
+ * Non-reversible 32-bit fingerprint. Used to put the CLIENT TOKEN in the cache
+ * scope without ever storing it: rotating/revoking the token used to keep
+ * serving the userTokens minted with the old one (X-011).
+ */
+export function shortHash(value: string): string {
+  let h = 5381
+  for (let i = 0; i < value.length; i++) h = ((h * 33) ^ value.charCodeAt(i)) >>> 0
+  return h.toString(16).padStart(8, '0')
 }
 
 export function tokenCacheKey(
-  cfg: { mode: string; appKey: string; baseUrl: string },
+  cfg: { mode: string; appKey: string; baseUrl: string; clientToken?: string },
   clientKey: string,
   ttlInMinutes: number,
 ): string {
@@ -397,7 +405,9 @@ async function cachedUserToken(
     if (!hit?.userToken) return null
     // Belt and braces: even if a key from an older build survives, the stored
     // scope has to match the scope we are running in right now.
-    if (hit.scope && hit.scope !== tokenCacheScope(cfg)) return null
+    // A stored value WITHOUT a scope used to be accepted, so the W-001 defence
+    // depended on what was written instead of on what is read (X-008).
+    if (hit.scope !== tokenCacheScope(cfg)) return null
     if (hit.ttlInMinutes !== ttlInMinutes) return null
     const left = secondsLeft(hit.expiresAt)
     if (left !== null && left <= TOKEN_CACHE_MARGIN_S) return null

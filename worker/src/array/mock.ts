@@ -20,6 +20,7 @@ import type {
 } from './types'
 import { ArrayApiError } from './types'
 import { ssnLast4 } from '../redact'
+import { calendarAge, monthsAgoISO } from '../dates'
 
 /**
  * Placeholder appKey for mock mode. Array's embed loader validates
@@ -58,6 +59,9 @@ export function mockUuid(seed: string): string {
     hash(`${seed}:${s}`).toString(16).padStart(8, '0').repeat(2).slice(0, n)
   return [hex('a', 8), hex('b', 4), hex('c', 4), hex('d', 4), hex('e', 12)].join('-').toUpperCase()
 }
+
+/** Window used by the "consultas hard (6 meses)" tile and the INQUIRIES factor. */
+export const INQUIRY_WINDOW_MONTHS = 6
 
 /** Fixed "now" anchor keeps fixtures stable inside a single month. */
 function monthsBack(n: number, from = new Date()): string {
@@ -174,7 +178,9 @@ export function mockFactors(stats: ReportStats): ScoreFactor[] {
       code: 'INQUIRIES',
       label: 'Consultas recentes',
       impact: 'low',
-      direction: 'negative',
+      // Zero hard inquiries inside the window is not a negative factor — saying
+      // "negativo: 0 consultas" would be the X-004 contradiction turned inside out.
+      direction: stats.hardInquiries6mo > 0 ? 'negative' : 'positive',
       description: `${plural(stats.hardInquiries6mo, 'consulta hard', 'consultas hard')} nos últimos 6 meses.`,
     },
     {
@@ -274,11 +280,17 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
     : []
 
   const utilization = revLimit > 0 ? Math.round((revBalance / revLimit) * 1000) / 10 : 0
-  const hardInquiries6mo = inquiries.filter((i) => i.type === 'Hard').length
-  const oldestAccountYears = Math.max(
-    1,
-    new Date().getUTCFullYear() - Math.min(...tradelines.map((t) => Number(t.opened.slice(0, 4)))),
-  )
+  // The tile is labelled "6 meses": count only what is INSIDE that window.
+  // Counting every hard inquiry put a "2" next to a table showing dates 6 months
+  // and 13 days old — the same tile-vs-table contradiction as W-004 (X-004).
+  const sixMonthsAgo = monthsAgoISO(INQUIRY_WINDOW_MONTHS)
+  const hardInquiries6mo = inquiries.filter((i) => i.type === 'Hard' && i.date >= sixMonthsAgo).length
+  // Whole years by CALENDAR, exactly like the DOB rule: subtracting years alone
+  // turned an account opened 2012-12-01 into "14 anos" on 2026-08-23 (X-005).
+  const oldestOpened = tradelines
+    .map((t) => t.opened)
+    .sort()[0]
+  const oldestAccountYears = Math.max(1, calendarAge(oldestOpened))
   const onTimeSlots = tradelines.flatMap((t) => t.paymentHistory)
   const onTimePct = onTimeSlots.length
     ? Math.round((onTimeSlots.filter((p) => p === 'OK').length / onTimeSlots.length) * 100)

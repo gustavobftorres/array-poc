@@ -28,12 +28,25 @@ export function Kba() {
     const res = await auth.run(() =>
       api.answerKba({ clientKey: clientKey.trim(), authToken: questions.data!.authToken, answers }),
     )
-    if (res?.userToken) patch({ userToken: res.userToken })
+    // The userToken came from the KBA answers: that is the event the Guia
+    // reports as "passo 2 feito" (X-006).
+    if (res?.userToken)
+      patch({
+        userToken: res.userToken,
+        kbaAuthenticatedAt: new Date().toISOString(),
+        userTokenSource: 'kba',
+      })
   }
 
   const mint = async () => {
     const res = await token.run(() => api.userToken({ clientKey: clientKey.trim(), ttlInMinutes: 60 }))
-    if (res?.userToken) patch({ userToken: res.userToken })
+    // This one IS a POST /api/array/usertoken made by the browser — passo 3.
+    if (res?.userToken)
+      patch({
+        userToken: res.userToken,
+        userTokenMintedAt: new Date().toISOString(),
+        userTokenSource: 'usertoken',
+      })
   }
 
   // Auto-fetch the questions when the session already knows the consumer (V-007).

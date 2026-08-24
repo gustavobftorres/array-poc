@@ -50,6 +50,8 @@ t '^200$' 'W-007 usertoken ttl 1440 (nao reaproveita o de 60)' -X POST -H "$J" -
 t '^200$' 'W-009 usertoken ?refresh=1' -X POST -H "$J" -d "{\"clientKey\":\"$CK\"}" "$BASE/api/array/usertoken?refresh=1"
 t '^404$' 'rota inexistente' "$BASE/api/array/nope"
 t '^40[0-9]$' 'metodo errado (DELETE user)' -X DELETE "$BASE/api/array/user"
+t '^200$' 'X-013 users com limit/offset' "$BASE/api/array/users?limit=2&offset=1"
+t '^200$' 'X-013 users com limit invalido (cai no default)' "$BASE/api/array/users?limit=abc&offset=-5"
 t '^200$' 'inspector limit negativo' "$BASE/api/inspector?limit=-5"
 t '^200$' 'inspector limit gigante' "$BASE/api/inspector?limit=999999999"
 t '^200$' 'inspector limit string' "$BASE/api/inspector?limit=abc"

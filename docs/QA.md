@@ -37,11 +37,12 @@ Os binários disponíveis:
 
 | Script | O que faz | Saída |
 |---|---|---|
-| `bash scripts/smoke-api.sh` | 40 casos HTTP de abuso contra `:8787` (payload de 2 MB, JSON quebrado, chaves inexistentes, path traversal, clamp de paginação, registro do mock no `GET /report`, TTL/refresh do cache de userToken) | `pass=40 fail=0` |
-| `PW_CHROMIUM=… node scripts/e2e-smoke.mjs` | percorre as 8 telas (inclui `/integracao`: 4 passos, diagrama, alternância curl/TypeScript, estado da sessão), roda o fluxo Enrollment→KBA→Report→Alerts, testa reload, foco por Tab e mobile 390px; grava `docs/screenshots/` | lista de achados (vazia = ok) |
+| `bash scripts/smoke-api.sh` | 42 casos HTTP de abuso contra `:8787` (payload de 2 MB, JSON quebrado, chaves inexistentes, path traversal, clamp de paginação, registro do mock no `GET /report`, TTL/refresh do cache de userToken) | `pass=42 fail=0` |
+| `PW_CHROMIUM=… node scripts/e2e-smoke.mjs` | percorre as 8 telas (inclui `/integracao`: 6 passos, diagrama, alternância curl/TypeScript, estado da sessão), roda o fluxo Enrollment→KBA→Report→Alerts, testa reload, foco por Tab e mobile 390px; grava `docs/screenshots/` | lista de achados (vazia = ok) |
 | `PW_CHROMIUM=… node scripts/snippet-check.mjs` | **valida o snippet do Playground de verdade**: copia o snippet real de 5 componentes da UI, cola em HTML em branco, sobe um http-server local e abre no Chromium; afere HTML válido, custom element no DOM, ordem dos scripts, `appKey` de 36 chars, listener de `array-event` e ausência de `SyntaxError`. Desde o ciclo 5 também cola um snippet **hostil** (`true" onload="alert(1)` num atributo + nome de atributo inválido via `prompt`) e afere que nenhum handler executável chega ao DOM, que a árvore não desloca e que a linha `userToken` sai sempre com a explicação de origem/TTL | `snippet-check: 0 achado(s)`; artefatos em `scripts/.tmp-snippets/` |
 | `PW_CHROMIUM=… node scripts/regression-ciclo3.mjs` | checagens de navegador dos IDs V-005…V-020 (labels, auto-load, tiles, base em mock, hint do Inspector, catálogo, overflow mobile 8/8 — com `/integracao` —, console limpo) + `GET /api/status` por visita (W-014) e se o input de atributo ainda estoura (V-018/W-015) | uma linha por ID |
-| `npm --workspace worker run test` | vitest (58 testes; inclui namespace do cache de userToken, idade por calendário e aritmética do relatório) | 58 passed |
+| `PW_CHROMIUM=… node scripts/guide-check-ciclo6.mjs` | **prova que o Guia de Integração é colável** (ciclo 6): lê os 6 pares de snippet da tela, roda `bash -n` em cada `curl`, **executa** cada um contra o worker local com o host reescrito (exigindo `clientKey`/`authToken`/`userToken`/`reportKey`/`score` na resposta), compila cada snippet TypeScript com `tsc --strict`, e afere `appKey` em todo body, ausência de comentário dentro de header, selos verificado/inferido e o estado por passo (sessão limpa = 0/6; semeada = 2/6, KBA/usertoken/componente seguem pendentes) | `0 achado(s)` |
+| `npm --workspace worker run test` | vitest (62 testes; inclui namespace do cache de userToken, idade por calendário e aritmética do relatório) | 62 passed |
 | `npm --workspace worker run typecheck` / `npm --workspace web run build` | tsc + vite | sem erros |
 
 `scripts/.tmp-snippets/` é recriado a cada execução (HTML + PNG por componente) e não deve ser
@@ -89,6 +90,20 @@ comitado.
     "Renovar userToken" muda o valor visível;
   - pedir um `ttlInMinutes` diferente **não** reaproveita o cache (`60` e `1440` são entradas
     distintas), e `ttlInMinutes: 1` não é cacheado;
+  - desde o ciclo 6 o escopo inclui também um **hash do client token** (X-011): rotacionar
+    `SMARTY_AUTH_TOKEN` invalida o cache mesmo com o mesmo `appKey`, e o token em si nunca entra na
+    chave (só o fingerprint de 32 bits);
+  - a leitura **exige** o campo `scope` no valor (X-008): entrada gravada à mão sem `scope` é
+    tratada como miss, então a defesa não depende de quem escreveu;
+  - **chaves de versões antigas** (o `usertoken:<clientKey>` do ciclo 3 e qualquer
+    `usertoken:v2:…` sem o segmento `ct…` do ciclo 6) ficam no KV até expirar. Elas são inertes —
+    o prefixo/escopo atual não as encontra — mas poluem a inspeção (X-012). Para limpar:
+    ```bash
+    # listar o que existe
+    ls worker/.wrangler/state/v3/kv/*/ 2>/dev/null
+    # limpeza total do estado local (perde D1 e KV)
+    rm -rf worker/.wrangler && npm run db:migrate
+    ```
   - o worker de sandbox em `:8788` compartilha o KV local, mas **não** enxerga mais os tokens do
     mock: a mesma requisição volta `502 kind:"blocked"` em vez de `200 cached:true` (era o W-001).
     Repro em um comando: mint no `:8787`, mesma requisição no `:8788`.
