@@ -48,10 +48,12 @@ Os binários disponíveis:
 | `PW_CHROMIUM=… node scripts/step-state-ciclo7.mjs` | os 6 estados de passo do Guia em 6 cenários com `localStorage` limpo; monta um componente **de verdade** stubando o CDN da Array por `page.route` (o botão é **Montar componente**, não há auto-mount) | limpa 0/6 · semeada **1/6** · enrollment 1/6 · KBA 2/6 · usertoken **2/6** · componente 1/6 (1 achado conhecido: `componentMountedAt` fica preso em verdadeiro depois que o CDN volta a ser bloqueado) |
 | `node scripts/report-audit-ciclo7.mjs [N]` | cria N consumidores, pede/busca o relatório e recomputa tudo do JSON cru (campos do summary: `inquiries6mo`, `oldestAccountYears`, `revolving*`) | `report-audit-ciclo7: 0 achado(s)` |
 | `PW_CHROMIUM=… node scripts/walkthrough-ciclo7.mjs` | 9 telas (8 rotas + rota inexistente) em desktop e mobile 390px, console, ≥400, tema (`☾ Escuro`/`☀ Claro`), F5 no meio do fluxo e a coerência da contagem de usuários; grava `docs/screenshots/qa7-*` | `0 achado(s)` desde o ciclo 9 (Y-006 corrigido: a tela imprime o `total`) |
+| `PW_CHROMIUM=… node scripts/regression-ciclo9.mjs` | **regressão independente dos 7 `Y-*` (ciclo 9)**: um veredito por ID com evidência própria — transpila `worker/src/dates.ts` com `esbuild` e varre 37 datas (dias 29/30/31, bissexto, virada de ano), recomputa a janela de consultas de 8 relatórios do JSON cru, extrai o `curl` do passo 6 da tela e o executa contra um **upstream próprio** que responde 401 e 200-vazio (o upstream roda em **outro processo** — `execFileSync` bloqueia o event loop, e um servidor no mesmo processo nunca aceitaria a conexão do curl), e cruza a recusa de nomes de atributo com os **20 atributos reais** da Array (§4.3 da pesquisa). Detalhe que custa tempo: sem `no_proxy=127.0.0.1` o `curl` do snippet vai para o proxy de egresso até para o loopback | `regression-ciclo9: 0 achado(s)` + `verdict.json` em `scripts/.tmp-ciclo9/` |
+| `PW_CHROMIUM=… node scripts/step4-stuck-ciclo9.mjs` | caracteriza o Z-001 em 3 cenários no mesmo `localStorage`: CDN stubado + **Montar componente** → **Desmontar** (elemento fora do DOM) → aba nova com o CDN bloqueado | o passo 4 fica "feito" nos três (é o achado 6b do `step-state-ciclo7`) |
 | `npm --workspace worker run test` | vitest (65 testes; inclui namespace do cache de userToken, idade por calendário e aritmética do relatório) | 65 passed |
 | `npm --workspace worker run typecheck` / `npm --workspace web run build` | tsc + vite | sem erros |
 
-`scripts/.tmp-snippets/` é recriado a cada execução (HTML + PNG por componente) e não deve ser
+`scripts/.tmp-snippets/` e `scripts/.tmp-ciclo9/` são recriados a cada execução (HTML + PNG por componente) e não deve ser
 comitado.
 
 ## 3. Passos não-óbvios
