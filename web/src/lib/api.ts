@@ -94,7 +94,16 @@ export const api = {
   seed: () => request<Record<string, unknown>>('/seed', { method: 'POST' }),
 
   createUser: (body: unknown) => request<{ clientKey: string; userId?: string; appKey: string }>('/array/user', { method: 'POST', body: JSON.stringify(body) }),
-  users: () => request<{ users: Record<string, unknown>[] }>('/array/users'),
+  /**
+   * The route pages since ciclo 7 (`limit` 1-200, default 50, plus `offset`)
+   * and returns the real `total`. The UI MUST read `total`: deducing the count
+   * from the page length made the Dashboard announce 50 users with 57 in the
+   * D1 (Y-006).
+   */
+  users: (params: { limit?: number; offset?: number } = {}) =>
+    request<{ users: Record<string, unknown>[]; total: number; limit: number; offset: number }>(
+      `/array/users${qs({ limit: params.limit, offset: params.offset })}`,
+    ),
   resolveUser: (userToken: string) => request<{ userId: string; clientKey: string }>(`/array/user${qs({ userToken })}`),
 
   kbaQuestions: (clientKey: string) =>

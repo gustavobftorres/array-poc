@@ -26,6 +26,17 @@ http
         res.writeHead(code, { 'content-type': 'application/json' })
         res.end(JSON.stringify(obj))
       }
+      // GET /report/v2 NAO leva client token: o par reportKey+displayToken E a
+      // autenticacao da leitura (ARRAY_API_RESEARCH §3.6). Exigir o segredo aqui
+      // fazia a Array falsa devolver 401 num caminho legitimo (ciclo 9).
+      if (url.pathname === '/api/report/v2' && req.method === 'GET') {
+        const rk = url.searchParams.get('reportKey')
+        const dt = url.searchParams.get('displayToken')
+        if (!rk || !dt) return json(400, { message: 'Validation failed', error: [{ param: 'displayToken' }] })
+        if (dt !== 'DISPLAY-TOKEN-1' && dt !== 'DISPLAY-TOKEN-2')
+          return json(401, { message: 'Unauthorized', got: dt })
+        return json(200, { reportKey: rk, score: 712 })
+      }
       if (ct !== SECRET) return json(401, { message: 'Unauthorized', got: ct ?? null })
       let parsed = null
       if (body) {

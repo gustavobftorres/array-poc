@@ -24,7 +24,10 @@ const SUMMARY_META: Record<string, { label: string; format: (v: unknown) => stri
   installmentBalance: { label: 'Saldo parcelado (hipoteca/auto/estudantil)', format: (v) => money(Number(v)) },
   revolvingAccounts: { label: 'Contas rotativas', format: String },
   delinquencies: { label: 'Contas com atraso', format: String },
-  inquiries6mo: { label: 'Consultas hard (6 meses)', format: String },
+  // The label spells out the WINDOW because the table below is historical:
+  // a tile reading "0" next to four Hard rows dated 6 months and 13 days back
+  // was arithmetically right and unreadable (Y-005).
+  inquiries6mo: { label: 'Consultas hard nos últimos 6 meses', format: String },
   oldestAccountYears: { label: 'Conta mais antiga', format: (v) => `${v} anos` },
 }
 
@@ -306,6 +309,12 @@ export function CreditReportPage() {
                       ))}
                     </tbody>
                   </table>
+                  <p className="hint" style={{ marginBottom: 0 }}>
+                    Esta tabela é o <strong>histórico completo</strong> de consultas do relatório. O tile{' '}
+                    <strong>Consultas hard nos últimos 6 meses</strong> ({r.summary?.inquiries6mo ?? 0}) e o fator{' '}
+                    <code>INQUIRIES</code> contam só as <span className="badge warn">Hard</span> com data dentro da
+                    janela de 6 meses — por isso os dois números podem diferir.
+                  </p>
                 </div>
               ) : (
                 <Empty>Nenhuma consulta.</Empty>

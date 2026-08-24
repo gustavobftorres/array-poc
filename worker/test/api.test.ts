@@ -686,3 +686,51 @@ describe('GET /api/array/users pagination (X-013)', () => {
     expect(bad.offset).toBe(0)
   })
 })
+
+describe('parameter and date borders (Y-007)', () => {
+  it('treats an empty or blank ?limit= as absent, not as zero', async () => {
+    for (const q of ['?limit=', '?limit=%20', '?limit=&offset=', '?limit=+']) {
+      const r = (await (await call(`/api/array/users${q}`)).json()) as { limit: number; offset: number }
+      expect(r.limit, q).toBe(50)
+      expect(r.offset, q).toBe(0)
+    }
+  })
+
+  it('monthsAgoISO clamps the day instead of rolling into the next month', () => {
+    // 2026-08-31 minus 6 months has no 31st: February 2026 ends on the 28th.
+    expect(monthsAgoISO(6, new Date('2026-08-31T12:00:00Z'))).toBe('2026-02-28')
+    expect(monthsAgoISO(1, new Date('2026-03-31T12:00:00Z'))).toBe('2026-02-28')
+    expect(monthsAgoISO(1, new Date('2024-03-31T12:00:00Z'))).toBe('2024-02-29')
+    expect(monthsAgoISO(1, new Date('2026-05-31T12:00:00Z'))).toBe('2026-04-30')
+    // Unaffected days keep the same calendar day, including across a year edge.
+    expect(monthsAgoISO(6, new Date('2026-08-24T12:00:00Z'))).toBe('2026-02-24')
+    expect(monthsAgoISO(6, new Date('2026-01-15T12:00:00Z'))).toBe('2025-07-15')
+    // The window is never SHORTER than the number of months it announces.
+    for (const day of [1, 15, 28, 29, 30, 31]) {
+      const now = new Date(Date.UTC(2026, 7, Math.min(day, 31), 12))
+      const cut = monthsAgoISO(6, now)
+      expect(cut <= now.toISOString().slice(0, 10)).toBe(true)
+      expect(Number(cut.slice(5, 7))).toBe(2)
+    }
+  })
+
+  it('every hard inquiry in the fixture sits inside the announced window (Y-005)', async () => {
+    const cutoff = monthsAgoISO(6)
+    for (let i = 0; i < 6; i++) {
+      const u = (await (await post('/api/array/user', { ...DEMO, firstName: `Inq${i}` })).json()) as {
+        clientKey: string
+      }
+      const ord = (await (await post('/api/array/report', { clientKey: u.clientKey, productCode: 'credmo3bReportScore' })).json()) as {
+        reportKey: string
+        displayToken: string
+      }
+      const r = (await (await call(`/api/array/report?reportKey=${ord.reportKey}&displayToken=${ord.displayToken}`)).json()) as {
+        inquiries: { type: string; date: string }[]
+        summary: { inquiries6mo: number }
+      }
+      const hard = r.inquiries.filter((q) => q.type === 'Hard')
+      expect(hard.every((q) => q.date >= cutoff), JSON.stringify(hard)).toBe(true)
+      expect(r.summary.inquiries6mo).toBe(hard.length)
+    }
+  })
+})

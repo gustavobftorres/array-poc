@@ -262,7 +262,11 @@ export function mockReport(clientKey: string, productCode: string, reportKey: st
   const inquiries = Array.from({ length: int(clientKey, 'inqc', 2, 4) }, (_, i) => ({
     bureau: BUREAUS[i % BUREAUS.length],
     subscriberName: pick(clientKey, `inqn${i}`, ['ROCKET MORTGAGE', 'AMEX', 'CARVANA', 'SOFI LENDING', 'LENDINGCLUB'] as const),
-    date: `${monthsBack(int(clientKey, `inqd${i}`, 1, 6))}-1${i}`,
+    // 1..5 months back, never 6: the tile counts a 6-month window, so a date
+    // 6 months and 13 days old put "4 consultas Hard" in the table next to a
+    // tile reading "0" (Y-005). The fixture now lives inside the window it
+    // announces; the filter below stays as the enforcement.
+    date: `${monthsBack(int(clientKey, `inqd${i}`, 1, 5))}-1${i}`,
     type: i === 0 ? 'Hard' : pick(clientKey, `inqt${i}`, ['Hard', 'Soft'] as const),
   }))
 

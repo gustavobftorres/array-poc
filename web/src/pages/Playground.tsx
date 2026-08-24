@@ -3,7 +3,9 @@ import {
   APP_KEY_PLACEHOLDER,
   ArrayComponent,
   buildSnippet,
+  hasExecutableScheme,
   isDangerousAttrName,
+  isUrlAttrName,
   isValidAppKey,
   isWellFormedAttrName,
   useArrayEvents,
@@ -222,7 +224,13 @@ export function Playground() {
     tokenEndpoint: 'POST /authenticate/v2/usertoken (via POST /api/array/usertoken nesta POC)',
   })
   const malformedAttrs = Object.keys(attrs).filter((k) => !isWellFormedAttrName(k))
-  const blockedAttrs = Object.keys(attrs).filter((k) => isWellFormedAttrName(k) && isDangerousAttrName(k))
+  const blockedAttrs = Object.keys(attrs).filter(
+    (k) => isWellFormedAttrName(k) && (isDangerousAttrName(k) || isUrlAttrName(k)),
+  )
+  /** Values, not names: `javascript:` in ANY attribute of the pasted snippet (Y-004). */
+  const schemeAttrs = Object.entries(attrs)
+    .filter(([, v]) => hasExecutableScheme(v))
+    .map(([k]) => k)
 
   const mint = async () => {
     if (!session.clientKey) return
@@ -309,8 +317,21 @@ export function Playground() {
                   // handler is refused at the door (X-007).
                   if (isDangerousAttrName(k)) {
                     setAttrError(
-                      `"${k}" é executável no HTML colado (on*/style/srcdoc) e não entra no snippet. ` +
-                        'Os componentes da Array recebem dados por atributos comuns e emitem array-event.',
+                      `"${k}" é executável no HTML colado (on*/style/srcdoc, incluindo data-on*) e não entra no ` +
+                        'snippet. Os componentes da Array recebem dados por atributos comuns e emitem array-event.',
+                    )
+                    return
+                  }
+                  // href/formaction/background são nomes legais e provadamente
+                  // INERTES num custom element <array-*> — mas o snippet é
+                  // colado na página do dev, onde o mesmo nome pode acabar num
+                  // elemento real. Nenhum componente da Array usa esses
+                  // atributos, então a POC recusa em vez de avisar (Y-004).
+                  if (isUrlAttrName(k)) {
+                    setAttrError(
+                      `"${k}" é atributo de URL no HTML (href/src/formaction/background/…): num <array-*> ele é ` +
+                        'inerte, mas no HTML que você vai colar pode virar navegação ou javascript:. Nenhum ' +
+                        'componente da Array recebe dados por esse atributo — use um atributo comum.',
                     )
                     return
                   }
@@ -331,12 +352,21 @@ export function Playground() {
                 <code>{malformedAttrs.join(', ')}</code>.
               </p>
             )}
+            {schemeAttrs.length > 0 && (
+              <p className="hint danger" style={{ marginTop: 8 }}>
+                Valor com esquema executável (<code>javascript:</code>/<code>vbscript:</code>/
+                <code>data:text/html</code>) em: <code>{schemeAttrs.join(', ')}</code>. Num{' '}
+                <code>&lt;array-*&gt;</code> isso é inerte (o custom element não navega), mas o snippet é colado na
+                SUA página — não versione um valor assim (Y-004).
+              </p>
+            )}
             {blockedAttrs.length > 0 && (
               <p className="hint danger" style={{ marginTop: 8 }}>
                 Nome(s) recusado(s) por serem executáveis no HTML que você vai colar:{' '}
                 <code>{blockedAttrs.join(', ')}</code>. <code>on*</code> é handler inline,{' '}
-                <code>style</code> é CSS injetado e <code>srcdoc</code> é um documento inteiro — nenhum entra no
-                snippet nem no componente montado (X-007).
+                <code>style</code> é CSS injetado, <code>srcdoc</code> é um documento inteiro e{' '}
+                <code>href</code>/<code>src</code>/<code>formaction</code>/<code>background</code> são atributos de
+                URL — nenhum entra no snippet nem no componente montado (X-007, Y-004).
               </p>
             )}
             {!session.userToken && needsUserToken && (

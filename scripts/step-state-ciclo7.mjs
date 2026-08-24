@@ -75,7 +75,9 @@ async function scenario(name, fn, expectDone) {
       await page.getByRole('button', { name: /Semear usuário demo/i }).click()
       await page.waitForTimeout(1200)
     },
-    [1, 5],
+    // Y-001 (ciclo 9): o passo 5 passou a vir do evento `reportOrderedAt` e o
+    // /api/seed pede o relatório no servidor — semear acende só o passo 1.
+    [1],
   )
   // reload não pode mudar nada
   const before = r.guide.done.join(',')
@@ -144,7 +146,7 @@ async function scenario(name, fn, expectDone) {
       await page.getByRole('button', { name: /Renovar userToken/i }).click()
       await page.waitForTimeout(1200)
     },
-    [1, 3, 5],
+    [1, 3],
   )
   await r.ctx.close()
 }

@@ -34,9 +34,23 @@ export function isFutureDate(date: string, now = new Date()): boolean {
   return date > today
 }
 
-/** `YYYY-MM-DD` of the same calendar day `months` months ago (UTC). */
+/** Last calendar day of a (possibly out-of-range) year/month pair, UTC. */
+function lastDayOfMonth(year: number, month1: number): number {
+  return new Date(Date.UTC(year, month1, 0)).getUTCDate()
+}
+
+/**
+ * `YYYY-MM-DD` of the same calendar day `months` months ago (UTC), with the day
+ * CLAMPED to the target month (Y-007).
+ * `Date.UTC(2026, 2, 31)` rolls over into April, so on 2026-08-31 the "6 months
+ * ago" cutoff came out 2026-03-03 — a window of 5 months and 28 days announced
+ * on screen as "6 meses". Same rollover class that `calendarAge` avoids.
+ */
 export function monthsAgoISO(months: number, now = new Date()): string {
   const [ty, tm, td] = todayParts(now)
-  const d = new Date(Date.UTC(ty, tm - 1 - months, td))
-  return d.toISOString().slice(0, 10)
+  const target = new Date(Date.UTC(ty, tm - 1 - months, 1))
+  const y = target.getUTCFullYear()
+  const m = target.getUTCMonth() + 1
+  const d = Math.min(td, lastDayOfMonth(y, m))
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }

@@ -8,3 +8,5 @@ dist/
 *.tsbuildinfo
 scripts/.tmp-snippets/
 scripts/.tmp-hostile/
+scripts/.tmp-attr7/
+scripts/.tmp-guide7/

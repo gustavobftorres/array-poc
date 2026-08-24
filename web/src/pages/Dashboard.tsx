@@ -7,13 +7,30 @@ import { Card, ErrorBox, Empty, Json, Stat, TokenChip, useAsync } from '../compo
 export function Dashboard() {
   const { status, statusError, reloadStatus, session, patch } = useSession()
   const [users, setUsers] = useState<Record<string, unknown>[]>([])
+  /** Rows in the D1, straight from the route's `total` — never `users.length`. */
+  const [total, setTotal] = useState(0)
   /** The D1 grows with every test seed; show a page, not everything (W-013). */
   const [showAll, setShowAll] = useState(false)
   const PAGE = 10
+  /** Hard ceiling of `GET /api/array/users?limit=` — one page cannot exceed it. */
+  const ROUTE_MAX = 200
   const seed = useAsync<Record<string, unknown>>()
 
+  // The route pages (`limit`/`offset`) and reports `total` separately, so the
+  // page size asked for here is what comes back: the screen must print `total`,
+  // not the payload length, or it announces "50" with 57 users in the D1 (Y-006).
   const loadUsers = useCallback(
-    () => api.users().then((r) => setUsers(r.users)).catch(() => setUsers([])),
+    (all = false) =>
+      api
+        .users({ limit: all ? ROUTE_MAX : PAGE })
+        .then((r) => {
+          setUsers(r.users)
+          setTotal(r.total)
+        })
+        .catch(() => {
+          setUsers([])
+          setTotal(0)
+        }),
     [],
   )
   // One fetch per mount. Depending on `status` used to fire this 3x per visit
@@ -21,6 +38,12 @@ export function Dashboard() {
   useEffect(() => {
     void loadUsers()
   }, [loadUsers])
+
+  const toggleAll = () => {
+    const next = !showAll
+    setShowAll(next)
+    void loadUsers(next)
+  }
 
   const runSeed = async () => {
     const res = await seed.run(() => api.seed())
@@ -39,11 +62,15 @@ export function Dashboard() {
         componentMountedAt: '',
         componentTag: '',
         userTokenSource: 'seed',
-        reportOrderedAt: new Date().toISOString(),
+        // The seed orders the report server-side in the same shot. Stamping
+        // `reportOrderedAt` here made /integracao count step 5 as done while
+        // step 3, with the identical provenance, refused to (Y-001): the key
+        // stays in the session, the EVENT does not.
+        reportOrderedAt: '',
         reportFetchedAt: '',
       })
       reloadStatus()
-      loadUsers()
+      loadUsers(showAll)
     }
   }
 
@@ -118,15 +145,15 @@ export function Dashboard() {
       )}
 
       <Card
-        title={`Usuários no D1 (${users.length})`}
+        title={`Usuários no D1 (${total})`}
         actions={
           <div className="row">
-            {users.length > PAGE && (
-              <button className="tiny ghost" onClick={() => setShowAll((v) => !v)}>
-                {showAll ? `Mostrar só os ${PAGE} mais recentes` : `Ver todos (${users.length})`}
+            {total > PAGE && (
+              <button className="tiny ghost" onClick={toggleAll}>
+                {showAll ? `Mostrar só os ${PAGE} mais recentes` : `Ver todos (${total})`}
               </button>
             )}
-            <button className="tiny" onClick={loadUsers}>Recarregar</button>
+            <button className="tiny" onClick={() => loadUsers(showAll)}>Recarregar</button>
           </div>
         }
       >
@@ -164,10 +191,18 @@ export function Dashboard() {
                 ))}
               </tbody>
             </table>
-            {!showAll && users.length > PAGE && (
+            {!showAll && total > users.length && (
               <p className="hint" style={{ marginBottom: 0 }}>
-                Mostrando os {PAGE} mais recentes de {users.length}. Use <strong>Ver todos</strong> para listar o resto —
-                a rota <code>GET /api/array/users</code> devolve a lista completa do D1 local.
+                Mostrando os {users.length} mais recentes de {total}. Use <strong>Ver todos</strong> para pedir uma
+                página maior — a rota <code>GET /api/array/users</code> pagina (<code>?limit=</code> 1–{ROUTE_MAX},
+                default 50, <code>?offset=</code>) e devolve o <code>total</code> do D1 local à parte.
+              </p>
+            )}
+            {showAll && total > users.length && (
+              <p className="hint" style={{ marginBottom: 0 }}>
+                Mostrando {users.length} de {total} — {ROUTE_MAX} é o teto de uma página em{' '}
+                <code>GET /api/array/users?limit=</code>. Para ver o resto, use <code>?offset=</code> na rota (ou
+                limpe o estado local: <code>rm -rf worker/.wrangler && npm run db:migrate</code>).
               </p>
             )}
           </div>

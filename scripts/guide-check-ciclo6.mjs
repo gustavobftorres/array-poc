@@ -223,14 +223,18 @@ const state = await page.locator('.step .step-state').allInnerTexts()
 const done = state.map((t) => !/pendente/.test(t))
 // semear cria consumidor e pede relatório no servidor; NÃO responde KBA, NÃO
 // chama /usertoken do browser, NÃO monta componente e NÃO busca o relatório.
-const esperado = [true, false, false, false, true, false]
+// Y-001 (ciclo 9): o passo 5 saiu de "reportKey presente" para o evento
+// `reportOrderedAt`, e o /api/seed pede o relatório no servidor.
+const esperado = [true, false, false, false, false, false]
 for (let i = 0; i < esperado.length; i++) {
   if (done[i] !== esperado[i]) {
     note('P1', `X-006: passo ${i + 1} após semear = ${done[i] ? 'feito' : 'pendente'}, esperado ${esperado[i] ? 'feito' : 'pendente'} -> ${state[i]?.slice(0, 140)}`)
   }
 }
-if (!/2\/6/.test(seeded)) note('P1', `X-006: após semear o contador deveria ser 2/6, foi "${seeded}"`)
-else ok('X-006: após semear = 2/6 (consumidor + relatório pedido); KBA, usertoken e componente seguem pendentes')
+// Desde o ciclo 9 (Y-001) o passo 5 também vem do EVENTO (`reportOrderedAt`), e o
+// /api/seed pede o relatório no servidor: semear acende só o passo 1.
+if (!/1\/6/.test(seeded)) note('P1', `X-006/Y-001: após semear o contador deveria ser 1/6, foi "${seeded}"`)
+else ok('X-006/Y-001: após semear = 1/6 (só o consumidor); KBA, usertoken, componente e relatório seguem pendentes')
 
 await browser.close()
 console.log(`\n${findings.length} achado(s)`)

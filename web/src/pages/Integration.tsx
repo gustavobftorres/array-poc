@@ -397,20 +397,33 @@ export async function pedirRelatorio(clientKey: string, productCode = 'credmo3bR
       { level: 'verified', text: 'PUT /report/v2 com { clientKey, reportKey } e o header do client token renova o displayToken.' },
       { level: 'verified', text: 'Formatos documentados: JSON, XML, PDF e HTML.' },
       { level: 'unverified', text: 'O esquema completo do envelope do relatório (esta POC modela um subconjunto e sempre guarda o payload cru).' },
+      { level: 'unverified', text: 'O critério de "relatório ainda vazio": a integração de referência só diz "repita até response.data estar populado" (§3.6) e não promete nenhum campo em particular — os snippets aqui testam corpo não-vazio e diferente de {} em vez de procurar "reportKey".' },
+      { level: 'unverified', text: '401/403 = displayToken expirado: §6 registra que os shapes de autenticação/autorização não são públicos (os status observados foram 400 e 404). Trate qualquer 4xx como erro que NÃO melhora esperando, e renove o displayToken com o PUT antes de reler.' },
     ],
     curl: `${SHELL_ENV}
 #      export REPORT_KEY='...' DISPLAY_TOKEN='...'   # do passo 5
 
-# o relatório pode voltar vazio por alguns segundos: espere, não desista
+# o relatório pode voltar vazio por alguns segundos: espere, não desista.
+# ATENÇÃO: esperar só faz sentido para 2xx vazio. Um 401/403/404 não melhora
+# com o tempo — aborte e mostre o corpo, senão você depura "relatório lento"
+# quando o problema é credencial (Y-002).
 for tentativa in 1 2 3 4 5 6 7 8 9 10; do
-  corpo=$(curl -sS -G https://sandbox.array.io/api/report/v2 \\
+  resposta=$(curl -sS -G -w '\\n%{http_code}' https://sandbox.array.io/api/report/v2 \\
     --data-urlencode "reportKey=$REPORT_KEY" \\
     --data-urlencode "displayToken=$DISPLAY_TOKEN")
-  if printf '%s' "$corpo" | grep -q '"reportKey"'; then
+  status=$(printf '%s' "$resposta" | tail -n1)
+  corpo=$(printf '%s' "$resposta" | sed '$d')
+  if [ "$status" != "200" ]; then
+    echo "HTTP $status na tentativa $tentativa — abortando (não é relatório vazio):" >&2
+    printf '%s\\n' "$corpo" >&2
+    exit 1
+  fi
+  # "populado" aqui = corpo que não é vazio nem {} — ver o selo // UNVERIFIED
+  if [ -n "$corpo" ] && [ "$(printf '%s' "$corpo" | tr -d ' \\n\\t')" != "{}" ]; then
     printf '%s\\n' "$corpo"
     break
   fi
-  echo "vazio na tentativa $tentativa — esperando 3 s" >&2
+  echo "HTTP 200 vazio na tentativa $tentativa — esperando 3 s" >&2
   sleep 3
 done
 
@@ -429,10 +442,10 @@ export async function buscarRelatorio(reportKey: string, displayToken: string) {
   const url = \`/report/v2?reportKey=\${reportKey}&displayToken=\${displayToken}\`
   for (let tentativa = 0; tentativa < 10; tentativa++) {
     const res = await arrayGet(url)
-    if (res.status === 401 || res.status === 403) {
-      // displayToken expirado: renove e tente de novo com o token novo.
-      throw new DisplayTokenExpirado()
-    }
+    // Qualquer 4xx: NÃO espere. 401/403 = displayToken expirado é inferência
+    // desta POC (// UNVERIFIED — ver os selos deste passo).
+    if (res.status === 401 || res.status === 403) throw new DisplayTokenExpirado()
+    if (!res.ok) throw new Error(\`Array /report/v2 -> \${res.status} \${await res.text()}\`)
     const dados = await res.json()
     if (dados && Object.keys(dados).length > 0) return dados
     await espera(3000) // a integração de referência repete a cada 3 s
@@ -608,9 +621,21 @@ export function IntegrationGuide() {
               : undefined,
       },
       'order-report': {
-        done: !!(session.reportKey && session.displayToken),
-        value: session.reportKey ? `reportKey ${session.reportKey} · displayToken ${session.displayToken}` : '',
-        label: 'reportKey + displayToken',
+        // Derived from the EVENT (`reportOrderedAt`), like every other step: a
+        // key sitting in the session proves only that SOMEBODY ordered the
+        // report — the seeded session had the same key and step 3, one card
+        // above, refused to count exactly that (Y-001, closing X-006).
+        done: !!session.reportOrderedAt,
+        value: session.reportOrderedAt
+          ? `POST /api/array/report em ${session.reportOrderedAt} → reportKey ${session.reportKey} · displayToken ${session.displayToken}`
+          : '',
+        label: 'POST /api/array/report feito nesta sessão',
+        why:
+          !session.reportOrderedAt && session.reportKey
+            ? semeado
+              ? 'existe reportKey na sessão, mas o relatório foi pedido pelo /api/seed (servidor), não por esta chamada'
+              : 'existe reportKey na sessão, mas ele não veio de um pedido feito nesta sessão'
+            : undefined,
       },
       'get-report': {
         done: !!session.reportFetchedAt,
@@ -633,6 +658,7 @@ export function IntegrationGuide() {
     session.userTokenSource,
     session.reportKey,
     session.displayToken,
+    session.reportOrderedAt,
     session.reportFetchedAt,
     appKey,
   ])

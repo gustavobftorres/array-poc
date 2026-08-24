@@ -272,8 +272,15 @@ app.get('/api/array/user', async (c) => {
   }
 })
 
-/** Positive integer query param with a default and a hard ceiling (X-013). */
+/**
+ * Positive integer query param with a default and a hard ceiling (X-013).
+ * An empty / whitespace-only value counts as ABSENT, not as zero (Y-007):
+ * `Number('') === 0` used to clamp to the minimum, so `?limit=` returned a
+ * single row and a consumer building `?limit=${x}` with an empty `x` saw what
+ * looked like an empty database instead of the default page.
+ */
 function intParam(raw: string | undefined, def: number, min: number, max: number): number {
+  if (raw === undefined || raw.trim() === '') return def
   const n = Number(raw)
   if (!Number.isFinite(n) || !Number.isInteger(n)) return def
   return Math.min(max, Math.max(min, n))

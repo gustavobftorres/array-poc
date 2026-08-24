@@ -74,7 +74,44 @@ const ATTR_NAME_RE = /^[A-Za-z][A-Za-z0-9_:.-]*$/
  */
 export function isDangerousAttrName(name: string): boolean {
   const n = name.trim().toLowerCase()
-  return n.startsWith('on') || n === 'style' || n === 'srcdoc'
+  // `data-onload` is not a handler today, but it is one rename away from being
+  // pasted into a template that maps data-* to attributes (Y-004).
+  return /^(data-)?on/.test(n) || n === 'style' || n === 'srcdoc'
+}
+
+/**
+ * Legal names whose VALUE the HTML parser treats as a URL — `href`,
+ * `formaction`, `background`, `xlink:href`, `src`, `action`, `poster`, `ping`.
+ * On an `<array-*>` custom element they were proved inert (QA ciclo 7 pasted
+ * all five with `javascript:window.__pwned=1` and nothing ran), but the snippet
+ * is the artefact the dev pastes into THEIR page, where the same name can land
+ * on a real element after one refactor — and no Array component takes any of
+ * them. Decision (Y-004): refuse at the door, like `on*`, with its own message.
+ */
+const URL_ATTR_NAMES = new Set([
+  'href',
+  'xlink:href',
+  'src',
+  'srcset',
+  'formaction',
+  'action',
+  'background',
+  'poster',
+  'ping',
+  'data',
+  'codebase',
+  'manifest',
+])
+
+export function isUrlAttrName(name: string): boolean {
+  return URL_ATTR_NAMES.has(name.trim().toLowerCase())
+}
+
+/** Values with an executable URL scheme — refused whatever the attribute name is. */
+export function hasExecutableScheme(value: string): boolean {
+  // Strip HTML-insignificant whitespace/control chars the parser also ignores.
+  const v = value.replace(/[\u0000-\u0020]/g, '').toLowerCase()
+  return v.startsWith('javascript:') || v.startsWith('vbscript:') || v.startsWith('data:text/html')
 }
 
 /** Syntactically valid HTML attribute name (says nothing about safety). */
@@ -83,7 +120,7 @@ export function isWellFormedAttrName(name: string): boolean {
 }
 
 export function isValidAttrName(name: string): boolean {
-  return isWellFormedAttrName(name) && !isDangerousAttrName(name)
+  return isWellFormedAttrName(name) && !isDangerousAttrName(name) && !isUrlAttrName(name)
 }
 
 /**
@@ -161,7 +198,9 @@ export function buildSnippet(
     .join('')
 
   const malformed = Object.keys(attrs).filter((k) => !isWellFormedAttrName(k))
-  const blocked = Object.keys(attrs).filter((k) => isWellFormedAttrName(k) && isDangerousAttrName(k))
+  const blocked = Object.keys(attrs).filter(
+    (k) => isWellFormedAttrName(k) && (isDangerousAttrName(k) || isUrlAttrName(k)),
+  )
 
   const appKeyNote = isValidAppKey(appKey)
     ? `<!-- appKey de exemplo (modo MOCK, 36 chars). Troque pelo appKey da sua conta Array. -->`
@@ -190,7 +229,7 @@ export function buildSnippet(
       : '') +
     (blocked.length
       ? `\n<!-- atributo(s) RECUSADO(s) por serem executáveis no HTML que você vai colar: ` +
-        `${escapeComment(blocked.join(', '))} — on*/style/srcdoc não entram no snippet. -->`
+        `${escapeComment(blocked.join(', '))} — on*/style/srcdoc (executáveis) e atributos de URL\n        (href/src/formaction/background/…) não entram no snippet. -->`
       : '')
 
   return [
