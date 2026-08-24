@@ -179,3 +179,36 @@ exercita mais o envelope de truncamento.
   `/api/webhooks/array/***`. O botão "Simular evento" da tela grava `source: simulated` — a Array
   não alcança o seu `localhost`, e não há API de registro: a `ARRAY_LISTENER_URL` é entregue ao
   Customer Success.
+
+## Ciclo 14 (QA) — sondas próprias das variáveis, do polling e do webhook
+
+Scripts do QA adversarial do ciclo 14 (relatório em `docs/VALIDATION_CICLO13.md`). Nenhum depende
+do `npm run dev` já estar de pé, **exceto** o `walkthrough-ciclo13.mjs` (precisa de `:5173`+`:8787`).
+
+| Script | O que faz | Saída |
+|---|---|---|
+| `node scripts/baseurl-matrix-ciclo13.mjs` | 22 valores de `ARRAY_BASE_URL` × com/sem `ARRAY_ENV`, chamando `getConfig` transpilado com esbuild (não sobe worker). Imprime `baseUrl`/`baseUrlSource`/`arrayEnv`/CDN/aviso por caso | tabela + `N achado(s)`; hoje **2** (o `http://` remoto sem aviso, W2-005 — loopback não é sinalizado) |
+| `node scripts/fake-upstream-ciclo13.mjs --port 8905 --log … --script "202,202,200"` | upstream falso instrumentado: grava método, path, query, **todos os headers**, corpo e timestamp de cada requisição em JSONL. Use `--script` para roteirizar o `GET /report/v2` (`202`, `204`, `200-empty`, `500`, `202*`) | fica em foreground; mate quando acabar |
+| `node scripts/poll-probe-ciclo13.mjs` | 18 cenários de polling, um `wrangler dev` isolado por cenário; **mede** nº de requisições, os intervalos reais e o tempo até o 504 | 4 "achados" são expectativa do harness (timeout inválido cai no default de 120 s, então a resposta demora de propósito) |
+| `node scripts/poll-probe2-ciclo13.mjs` | os 3 casos que exigem worker limpo: intervalo gigante, `200` com corpo vazio, timeout gigante | 3 blocos de log (sem contador) |
+| `scripts/boot-worker-ciclo13.sh PORTA VAR:VALOR …` | sobe um worker isolado com `--var` e espera o `/api/status`; imprime o PID na 1ª linha | `kill <pid>` no fim |
+| `PW_CHROMIUM=… node scripts/walkthrough-ciclo13.mjs` | 9 telas × (desktop, 390 px): console, overflow, ausência de `SMARTY_AUTH_*` na UI, tema, e o seletor de simulação do relatório (`pending-then-ready` e `pending-then-failure`) na tela Credit Report. Grava `docs/screenshots/qa13-*` | `walkthrough-ciclo13: 0 achado(s)` |
+
+Passos não-óbvios aprendidos aqui (custam tempo):
+
+- **Portas fixas colidem.** `scripts/verify-guide-ciclo7.mjs` usa `127.0.0.1:8899` e
+  `scripts/regression-ciclo9.mjs` usa `8931`. Se outro processo (por exemplo o
+  `fake-upstream-ciclo13.mjs`, ou um worker de teste esquecido) ocupar a porta, os dois saem com
+  achados **falsos** — 5 e 8 respectivamente, com "requisições vistas: 0". Antes de acusar
+  regressão, confira as portas (W2-014).
+- **Matar worker de teste**: `kill` no PID do `wrangler` deixa o `workerd` vivo e a porta presa.
+  Mate os dois (`ps -eo pid,args | grep -E "[w]rangler dev|[w]orkerd serve"`) e **não** derrube
+  por engano o `workerd` do `:8787` (o do `npm run dev` tem dois processos `workerd`, um deles com
+  `--socket-addr=entry=127.0.0.1:0`).
+- **Dois scripts saem com achado por design** e não estão na suíte do README:
+  `scripts/integration-audit-ciclo5.mjs` (**3 achados**: audita um Guia de 4 passos, que tem 6
+  desde o ciclo 6) e `scripts/pii-probe-ciclo11.mjs` (**5 achados**: 4 são sentinelas dentro dos
+  envelopes `{_truncated,preview}`/`{raw}` e do sqlite bruto da tabela `users`, por design; 1 é a
+  mensagem de erro do upstream não redigida). Qualquer número diferente de 3 e 5 é regressão.
+- Os artefatos ficam em `scripts/.tmp-ciclo13/` (`baseurl-matrix.json`, `poll-probe.json`, os
+  JSONL do upstream falso) — cobertos pelo `.gitignore` do glob `scripts/.tmp-*`.
