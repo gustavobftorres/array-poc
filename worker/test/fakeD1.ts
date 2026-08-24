@@ -11,7 +11,7 @@ export interface FakeD1 {
 
 const API_CALL_COLS = ['id', 'ts', 'method', 'path', 'status', 'duration_ms', 'request', 'response', 'mode']
 
-const WEBHOOK_COLS = ['id', 'received_at', 'event_type', 'client_key', 'report_key', 'source', 'payload', 'created_at']
+const WEBHOOK_COLS = ['id', 'received_at', 'event_type', 'client_key', 'report_key', 'source', 'payload', 'created_at', 'dedupe_key']
 
 export function fakeD1(): FakeD1 & {
   rows: Record<string, unknown>[]
@@ -66,6 +66,11 @@ export function fakeD1(): FakeD1 & {
       statements.push({ sql, params })
       if (/COUNT/i.test(sql)) {
         return { n: isWebhooks(sql) ? webhookEvents.length : isApiCalls(sql) ? apiCalls.length : rows.length }
+      }
+      // W2-009: a consulta de idempotência precisa casar de verdade, senão o
+      // fake devolveria "já existe" para qualquer evento.
+      if (isWebhooks(sql) && /dedupe_key\s*=\s*\?/i.test(sql)) {
+        return webhookEvents.find((r) => r.dedupe_key === params[0]) ?? null
       }
       if (isWebhooks(sql)) return webhookEvents[0] ?? null
       return isApiCalls(sql) ? (apiCalls[0] ?? null) : (rows[0] ?? null)

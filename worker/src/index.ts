@@ -11,7 +11,7 @@ import { redact } from './redact'
 import { PERSONAS } from './personas'
 import { maskWebhookPath, normalizeWebhookEvent, webhookTokenMatches } from './webhook'
 
-type Vars = { requestBody?: unknown }
+type Vars = { requestBody?: unknown; bodyUnparseable?: boolean }
 const app = new Hono<{ Bindings: Env; Variables: Vars }>()
 
 app.use('*', cors())
@@ -94,6 +94,8 @@ app.use('/api/*', async (c, next) => {
         requestBody = JSON.parse(raw)
       } catch {
         requestBody = { raw: raw.slice(0, 2000) }
+        // W2-009: o listener precisa saber que o corpo não era JSON.
+        c.set('bodyUnparseable', true)
       }
     }
     c.set('requestBody', requestBody)
@@ -711,6 +713,29 @@ app.get('/api/personas', (c) => {
 app.post('/api/seed', async (c) => {
   const p = provider(c.env)
   const cfg = getConfig(c.env)
+  /**
+   * W2-002 — em produção a identidade foi DESCARTADA na origem (config.ts), o
+   * que deixa `cfg.identity` vazia. Semear com campos vazios só produziria um
+   * 400 confuso da Array, então a POC recusa aqui, dizendo por quê.
+   */
+  if (cfg.identityDiscarded) {
+    return c.json(
+      {
+        seeded: false,
+        message:
+          'POST /api/seed está recusado: o ambiente efetivo é PRODUÇÃO e a identidade de teste foi descartada. A POC nunca envia PII (SSN, DOB, endereço) de ARRAY_IDENTITY para um host de produção.',
+        kind: 'identity_discarded',
+        details: {
+          arrayEnv: cfg.arrayEnv,
+          arrayEnvSource: cfg.arrayEnvSource,
+          baseUrl: cfg.baseUrl,
+          reason: cfg.identityDiscardReason,
+          fix: 'Aponte ARRAY_BASE_URL/ARRAY_ENV para o sandbox para semear uma persona, ou crie o usuário de produção com dados reais por POST /api/array/user.',
+        },
+      },
+      409,
+    )
+  }
   const identity = {
     firstName: cfg.identity.firstName,
     lastName: cfg.identity.lastName,
@@ -821,7 +846,13 @@ app.delete('/api/inspector', async (c) => {
 app.get('/api/webhooks/config', (c) => {
   const cfg = getConfig(c.env)
   return c.json({
-    listenerUrl: cfg.listenerUrl || null,
+    /**
+     * W2-003 — a listener URL sai MASCARADA: o formato documentado embute o
+     * ARRAY_WEBHOOK_TOKEN no path, então devolver a URL "informativa" era
+     * devolver o segredo. A URL completa vive só no seu `.env`.
+     */
+    listenerUrl: cfg.listenerUrlMasked || null,
+    listenerUrlMasked: cfg.listenerUrlHadSecret,
     configured: cfg.webhookToken.length > 0,
     /** O segredo NUNCA é devolvido — só o formato do path. */
     localPath: '/api/webhooks/array/<ARRAY_WEBHOOK_TOKEN>',
@@ -870,7 +901,7 @@ app.post('/api/webhooks/simulate', async (c) => {
   const id = c.env?.DB
     ? await db.insertWebhookEvent(c.env.DB, { ...event, source: 'simulated' })
     : null
-  return c.json({ received: true, simulated: true, id, eventType: event.eventType })
+  return c.json({ received: true, simulated: true, id, eventType: event.eventType, parseable: event.parseable })
 })
 
 /**
@@ -881,18 +912,33 @@ app.post('/api/webhooks/array/:token', async (c) => {
   const cfg = getConfig(c.env)
   // Sem token configurado a rota não existe: nada a comparar, nada a revelar.
   if (!cfg.webhookToken) {
-    return c.json({ message: 'Not Found', hint: 'defina ARRAY_WEBHOOK_TOKEN para habilitar o listener' }, 404)
+    // W2-011: a dica é útil no terminal de quem roda a POC, não na resposta
+    // HTTP — na resposta ela ensinava a quem sonda que a rota existe e está
+    // desligada. As duas situações agora dão o MESMO 404 de 23 bytes.
+    console.warn('[webhook] listener chamado sem ARRAY_WEBHOOK_TOKEN configurado — defina a variável para habilitá-lo.')
+    return c.json({ message: 'Not Found' }, 404)
   }
   if (!webhookTokenMatches(cfg.webhookToken, c.req.param('token'))) {
     // Mensagem genérica de propósito: nem confirma o formato do segredo.
     return c.json({ message: 'Not Found' }, 404)
   }
-  const event = normalizeWebhookEvent(body(c))
+  // W2-009: um corpo que não é objeto JSON (JSON quebrado, vazio, array) é
+  // marcado como NÃO PARSEÁVEL em vez de virar evento de aparência normal.
+  // `body(c)` normaliza ausência para `{}`; aqui o corpo vazio importa, então
+  // lemos o valor cru do middleware.
+  const event = normalizeWebhookEvent(c.get('requestBody'), { unparseable: c.get('bodyUnparseable') === true })
+  // W2-009: idempotência — a entrega é at-least-once e a Array não assina, então
+  // a mesma notificação pode chegar duas vezes. Reentrega devolve 200 (a doc
+  // exige) sem gravar uma segunda linha.
+  const existing = event.dedupeKey && c.env?.DB ? await db.findWebhookEventByDedupeKey(c.env.DB, event.dedupeKey) : null
+  if (existing) {
+    return c.json({ received: true, id: existing, eventType: event.eventType, parseable: event.parseable, duplicate: true })
+  }
   const id = c.env?.DB ? await db.insertWebhookEvent(c.env.DB, { ...event, source: 'array' }) : null
   // A doc pede 200 rápido para confirmar o recebimento. O payload é tratado
   // como notificação NÃO confiável: nada aqui vira verdade sem reconfirmar
   // pela API.
-  return c.json({ received: true, id, eventType: event.eventType })
+  return c.json({ received: true, id, eventType: event.eventType, parseable: event.parseable, duplicate: false })
 })
 
 app.notFound((c) => c.json({ message: 'Not Found', path: maskWebhookPath(new URL(c.req.url).pathname) }, 404))

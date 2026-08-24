@@ -4,7 +4,7 @@
  * Não reusa nada de scripts/guide-check-ciclo6.mjs (do DEV). A ideia é diferente
  * e mais dura: em vez de reescrever o host para o worker da POC (que expõe rotas
  * /api/array/*, e não as da Array), este script sobe um FALSO servidor da Array
- * em 127.0.0.1:8899 que implementa as rotas reais (/api/user/v2,
+ * em 127.0.0.1 (porta livre) que implementa as rotas reais (/api/user/v2,
  * /api/authenticate/v2, /api/authenticate/v2/usertoken, /api/report/v2) e
  * VALIDA a requisição como a Array validaria:
  *   - header x-credmo-client-token EXATAMENTE igual ao segredo (sem comentário
@@ -21,9 +21,12 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
+import { freePort, waitForPort } from './free-port.mjs'
 
 const WEB = process.env.WEB ?? 'http://localhost:5173'
-const PORT = 8899
+// W2-014: porta livre em vez de porta fixa — uma 8899 ocupada fazia este
+// script acusar 5 achados falsos no produto.
+const PORT = await freePort(Number(process.env.PORT ?? 8899))
 const TMP = path.join(process.cwd(), 'scripts/.tmp-guide7')
 const SECRET = 'CLIENT-TOKEN-SEGREDO-DO-SERVIDOR'
 const APP_KEY = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE' // 36 chars
@@ -40,7 +43,11 @@ const child = spawn(process.execPath, ['scripts/fake-array-ciclo7.mjs'], {
   env: { ...process.env, PORT: String(PORT), LOG, SECRET, APP_KEY },
   stdio: 'inherit',
 })
-await new Promise((r) => setTimeout(r, 700))
+if (!(await waitForPort(PORT))) {
+  console.error(`ERRO DE HARNESS: a Array falsa não subiu em 127.0.0.1:${PORT} (porta ocupada?). Isto NÃO é achado do produto.`)
+  child.kill()
+  process.exit(2)
+}
 const readLog = () =>
   fs
     .readFileSync(LOG, 'utf8')

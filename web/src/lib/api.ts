@@ -8,6 +8,11 @@ export interface Status {
   baseUrl: string
   /** De onde saiu a base: override explícito ou derivada do ARRAY_ENV. */
   baseUrlSource: 'ARRAY_BASE_URL' | 'ARRAY_ENV'
+  /** Quem decidiu o ambiente: o host efetivo manda, ARRAY_ENV é fallback. */
+  arrayEnvSource: 'ARRAY_BASE_URL' | 'ARRAY_ENV' | 'default'
+  hostClass: 'sandbox' | 'production' | 'local'
+  /** Divergência entre ARRAY_ENV declarado e o host chamado (erro visível). */
+  envMismatch: { declared: 'sandbox' | 'production'; effective: 'sandbox' | 'production'; host: string } | null
   componentsCdn: string
   /** Trava do ARRAY_AUTH_MODE: em `browser` o client token nunca é anexado. */
   authMode: 'server' | 'browser'
@@ -16,13 +21,18 @@ export interface Status {
   identity: {
     slug: string | null
     label: string
-    source: 'default' | 'persona' | 'json'
+    source: 'default' | 'persona' | 'json' | 'discarded'
     confidence: 'verified' | 'unverified'
     note: string
     sandboxOnly: boolean
+    /** Em produção a identidade é esvaziada, não re-rotulada. */
+    discarded: boolean
+    discardReason: string | null
   }
   webhook: {
+    /** Já vem com o segredo do path elidido (`.../array/***`). */
     listenerUrl: string | null
+    listenerUrlMasked: boolean
     localPath: string | null
     configured: boolean
     secretInPathInferred: boolean
@@ -66,7 +76,9 @@ export interface WebhookEvent {
 }
 
 export interface WebhookConfig {
+  /** Já vem com o segredo do path elidido. */
   listenerUrl: string | null
+  listenerUrlMasked?: boolean
   configured: boolean
   localPath: string
   registrationIsManual: boolean

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import app from '../src/index'
 import { fakeD1 } from './fakeD1'
-import { maskWebhookPath, normalizeWebhookEvent, timingSafeEqual, webhookTokenMatches } from '../src/webhook'
+import { maskListenerUrl, maskWebhookPath, normalizeWebhookEvent, timingSafeEqual, webhookTokenMatches } from '../src/webhook'
 
 const TOKEN = 'w3bh00k-secret-do-path'
 
@@ -136,8 +136,10 @@ describe('simulação local e configuração', () => {
       ARRAY_LISTENER_URL: 'https://meu.host/api/webhooks/array/xxx',
     })
     const json = await res.json()
+    // W2-003: o último segmento é o segredo — sai elidido.
     expect(json).toMatchObject({
-      listenerUrl: 'https://meu.host/api/webhooks/array/xxx',
+      listenerUrl: 'https://meu.host/api/webhooks/array/***',
+      listenerUrlMasked: true,
       configured: true,
       registrationIsManual: true,
       signatureFromArray: false,
@@ -156,5 +158,84 @@ describe('simulação local e configuração', () => {
     expect(json).toMatchObject({ authMode: 'browser' })
     expect(json.webhook).toMatchObject({ configured: true, listenerUrl: 'https://meu.host/hook' })
     expect(JSON.stringify(json)).not.toContain(TOKEN)
+  })
+
+  // -------------------------------------------------------------------------
+  // W2-003 — o token dentro da ARRAY_LISTENER_URL não sai de /api/status nem
+  // de /api/webhooks/config. Este era o vazamento: a URL documentada embute o
+  // segredo no path.
+  // -------------------------------------------------------------------------
+  it('W2-003: nem /api/status nem /api/webhooks/config devolvem o token embutido na listener URL', async () => {
+    const extra = { ARRAY_WEBHOOK_TOKEN: TOKEN, ARRAY_LISTENER_URL: `https://meu.host/api/webhooks/array/${TOKEN}` }
+    for (const path of ['/api/status', '/api/webhooks/config']) {
+      const text = await (await call(path, undefined, extra)).text()
+      expect(text).not.toContain(TOKEN)
+      expect(text).toContain('/api/webhooks/array/***')
+    }
+  })
+
+  it('maskListenerUrl elide o segredo em qualquer posição', () => {
+    expect(maskListenerUrl('https://h/api/webhooks/array/abc123', 'abc123')).toBe('https://h/api/webhooks/array/***')
+    expect(maskListenerUrl('https://h/x/abc123?t=abc123', 'abc123')).toBe('https://h/x/***?t=***')
+    expect(maskListenerUrl('', 'abc123')).toBe('')
+    expect(maskListenerUrl('https://h/hook', '')).toBe('https://h/hook')
+  })
+
+  // -------------------------------------------------------------------------
+  // W2-011 — o 404 não pode distinguir "não configurado" de "token errado".
+  // -------------------------------------------------------------------------
+  it('W2-011: 404 idêntico com e sem ARRAY_WEBHOOK_TOKEN configurado', async () => {
+    const semToken = await postJson('/api/webhooks/array/qualquer', { a: 1 }, {})
+    const tokenErrado = await postJson('/api/webhooks/array/errado', { a: 1 }, { ARRAY_WEBHOOK_TOKEN: TOKEN })
+    expect(semToken.status).toBe(404)
+    expect(tokenErrado.status).toBe(404)
+    const [a, b] = [await semToken.text(), await tokenErrado.text()]
+    expect(a).toBe(b)
+    expect(a).not.toMatch(/ARRAY_WEBHOOK_TOKEN|hint/)
+  })
+
+  // -------------------------------------------------------------------------
+  // W2-009 — corpo não parseável é MARCADO, e reentrega não duplica.
+  // -------------------------------------------------------------------------
+  it('W2-009: JSON inválido responde 200 mas é marcado como não parseável', async () => {
+    const res = await call(
+      `/api/webhooks/array/${TOKEN}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"broken":' },
+      { ARRAY_WEBHOOK_TOKEN: TOKEN },
+    )
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { parseable: boolean; eventType: string }
+    expect(json.parseable).toBe(false)
+    expect(json.eventType).toMatch(/NÃO PARSEÁVEL/)
+    expect(String(db.webhookEvents[0].event_type)).toMatch(/NÃO PARSEÁVEL/)
+  })
+
+  it('W2-009: array e corpo vazio também são marcados', async () => {
+    const arr = await postJson(`/api/webhooks/array/${TOKEN}`, [1, 2, 3], { ARRAY_WEBHOOK_TOKEN: TOKEN })
+    expect(((await arr.json()) as { parseable: boolean }).parseable).toBe(false)
+    const vazio = await call(`/api/webhooks/array/${TOKEN}`, { method: 'POST' }, { ARRAY_WEBHOOK_TOKEN: TOKEN })
+    expect(((await vazio.json()) as { parseable: boolean }).parseable).toBe(false)
+  })
+
+  it('W2-009: o mesmo evento entregue duas vezes grava UMA linha', async () => {
+    const evt = { id: 'EVT-1', eventType: 'Report is ready', reportKey: 'RK-1' }
+    const first = await postJson(`/api/webhooks/array/${TOKEN}`, evt, { ARRAY_WEBHOOK_TOKEN: TOKEN })
+    const second = await postJson(`/api/webhooks/array/${TOKEN}`, evt, { ARRAY_WEBHOOK_TOKEN: TOKEN })
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(((await first.json()) as { duplicate: boolean }).duplicate).toBe(false)
+    const dup = (await second.json()) as { duplicate: boolean; id: string }
+    expect(dup.duplicate).toBe(true)
+    expect(db.webhookEvents.length).toBe(1)
+    // Um evento DIFERENTE continua sendo gravado.
+    await postJson(`/api/webhooks/array/${TOKEN}`, { ...evt, id: 'EVT-2' }, { ARRAY_WEBHOOK_TOKEN: TOKEN })
+    expect(db.webhookEvents.length).toBe(2)
+  })
+
+  it('W2-009: normalizeWebhookEvent expõe parseable e dedupeKey', () => {
+    expect(normalizeWebhookEvent({ id: 'X' }).dedupeKey).toBe('id:X')
+    expect(normalizeWebhookEvent({ eventType: 'E', reportKey: 'R' }).dedupeKey).toBe('evt:E|R|')
+    expect(normalizeWebhookEvent({}).dedupeKey).toBeNull()
+    expect(normalizeWebhookEvent({}, { unparseable: true }).parseable).toBe(false)
   })
 })

@@ -17,6 +17,7 @@
  */
 import { chromium } from '@playwright/test'
 import fs from 'node:fs'
+import { freePort, waitForPort } from './free-port.mjs'
 import path from 'node:path'
 import http from 'node:http'
 import { execFileSync } from 'node:child_process'
@@ -140,7 +141,9 @@ const set = (id, v, ev) => {
 // processo — execFileSync bloqueia o event loop, então um servidor no mesmo
 // processo nunca aceitaria a conexão do curl (e o snippet pareceria não pedir
 // nada).
-const PORT9 = Number(process.env.PORT9 ?? 8931)
+// W2-014: porta livre em vez de porta fixa — uma 8931 ocupada fazia este
+// script acusar 8 achados falsos ("Y-002 NAO CORRIGIDO").
+const PORT9 = await freePort(Number(process.env.PORT9 ?? 8931))
 const UPLOG = path.join(TMP, 'upstream.log')
 const UPFILE = path.join(TMP, 'upstream.mjs')
 fs.writeFileSync(UPFILE, `import http from 'node:http'
@@ -182,7 +185,11 @@ const up = spawn(process.execPath, [UPFILE], {
   stdio: 'ignore',
   detached: false,
 })
-await new Promise((r) => setTimeout(r, 800))
+if (!(await waitForPort(PORT9))) {
+  console.error(`ERRO DE HARNESS: o upstream falso não subiu em 127.0.0.1:${PORT9} (porta ocupada?). Isto NAO e achado do produto.`)
+  up.kill()
+  process.exit(2)
+}
 const upHits = (rk) =>
   fs.readFileSync(UPLOG, 'utf8').split('\n').filter((l) => l.startsWith('GET /api/report/v2 ' + rk)).length
 

@@ -230,6 +230,19 @@ export class ArrayClient implements ArrayProvider {
           proxyBlocked ? 'blocked' : 'http',
         )
       }
+      /**
+       * W2-008 — `200` com corpo vazio é resposta MALFORMADA do upstream, não
+       * "relatório pronto". Antes ela resolvia o polling com `undefined` e a
+       * POC gravava um relatório vazio como se estivesse tudo bem.
+       */
+      if (!text.trim()) {
+        throw new ArrayApiError(
+          'A Array respondeu HTTP 200 sem corpo em GET /report/v2 — resposta malformada (200 significa "relatório pronto", logo o corpo é obrigatório). Nada foi gravado; peça o relatório de novo.',
+          502,
+          { status: 200, body: null },
+          'http',
+        )
+      }
       return { status: 200, body: parsed }
     } catch (e) {
       if (e instanceof ArrayApiError) throw e

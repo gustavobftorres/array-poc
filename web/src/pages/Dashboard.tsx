@@ -104,8 +104,19 @@ export function Dashboard() {
       <div className="grid cols-2">
         <Card title="Ambiente">
           <dl className="kv">
-            <dt>ARRAY_ENV</dt>
-            <dd>{status?.arrayEnv ?? '—'}</dd>
+            <dt>Ambiente</dt>
+            <dd>
+              <span className={`badge ${status?.arrayEnv === 'production' ? 'danger' : 'ok'}`}>
+                {status?.arrayEnv ?? '—'}
+              </span>{' '}
+              <span className="badge neutral">
+                {status?.arrayEnvSource === 'ARRAY_BASE_URL'
+                  ? 'derivado do host de ARRAY_BASE_URL'
+                  : status?.arrayEnvSource === 'ARRAY_ENV'
+                    ? 'declarado em ARRAY_ENV'
+                    : 'default (sandbox)'}
+              </span>
+            </dd>
             <dt>Base URL</dt>
             <dd className="mono">
               {status?.baseUrl ?? '—'}{' '}
@@ -134,14 +145,21 @@ export function Dashboard() {
             <dt>ARRAY_IDENTITY</dt>
             <dd>
               {status?.identity.label ?? '—'}{' '}
-              <span className={`badge ${status?.identity.confidence === 'verified' ? 'ok' : 'warn'}`}>
-                {status?.identity.confidence === 'verified' ? 'verificado' : '// UNVERIFIED'}
-              </span>{' '}
-              <span className="badge neutral">só sandbox</span>
+              {status?.identity.discarded ? (
+                <span className="badge danger">descartada</span>
+              ) : (
+                <>
+                  <span className={`badge ${status?.identity.confidence === 'verified' ? 'ok' : 'warn'}`}>
+                    {status?.identity.confidence === 'verified' ? 'verificado' : '// UNVERIFIED'}
+                  </span>{' '}
+                  <span className="badge neutral">só sandbox</span>
+                </>
+              )}
             </dd>
             <dt>ARRAY_LISTENER_URL</dt>
             <dd className="mono" style={{ overflowWrap: 'anywhere' }}>
               {status?.webhook.listenerUrl ?? 'não configurada'}{' '}
+              {status?.webhook.listenerUrlMasked && <span className="badge ok">segredo elidido</span>}{' '}
               <Link className="small" to="/webhooks">ver Webhooks</Link>
             </dd>
             <dt>CDN dos componentes</dt>
@@ -155,6 +173,20 @@ export function Dashboard() {
             O <code>ARRAY_SERVER_TOKEN</code> nunca sai do worker — o frontend só vê booleanos e o{' '}
             <code>userToken</code> de curta duração.
           </p>
+          {status?.envMismatch && (
+            <div className="alert-box err" style={{ marginTop: 10 }}>
+              <strong>Erro de configuração: ambiente declarado ≠ host chamado.</strong> O{' '}
+              <code>ARRAY_ENV</code> diz <code>{status.envMismatch.declared}</code>, mas as chamadas vão para{' '}
+              <code>{status.envMismatch.host}</code>, que é <code>{status.envMismatch.effective}</code>. O host manda:
+              esta POC opera como <strong>{status.envMismatch.effective}</strong> (CDN e regras de identidade
+              incluídas). Corrija <code>ARRAY_ENV</code> ou <code>ARRAY_BASE_URL</code>.
+            </div>
+          )}
+          {status?.identity.discarded && (
+            <div className="alert-box err" style={{ marginTop: 10 }}>
+              <strong>ARRAY_IDENTITY descartada.</strong> {status.identity.discardReason}
+            </div>
+          )}
           {!!status?.warnings.length && (
             <div className="alert-box warn" style={{ marginTop: 10 }}>
               <strong>Avisos de configuração</strong>

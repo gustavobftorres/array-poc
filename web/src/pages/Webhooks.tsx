@@ -59,7 +59,10 @@ export function WebhooksPage() {
     await load()
   }
 
+  // W2-003: o que chega aqui JÁ vem com o segredo do path elidido — a URL
+  // completa nunca sai do worker.
   const listener = cfg?.listenerUrl ?? status?.webhook.listenerUrl ?? null
+  const listenerMasked = (cfg?.listenerUrlMasked ?? status?.webhook.listenerUrlMasked) === true
   const configured = cfg?.configured ?? status?.webhook.configured ?? false
 
   return (
@@ -100,7 +103,18 @@ export function WebhooksPage() {
             <dt>ARRAY_LISTENER_URL</dt>
             <dd className="mono" style={{ overflowWrap: 'anywhere' }}>
               {listener ?? <span className="muted">não configurada — defina ARRAY_LISTENER_URL no .env</span>}
-              {listener && <CopyButton text={listener} label="Copiar" />}
+              {listener && <CopyButton text={listener} label="Copiar (elidida)" />}
+              {listenerMasked && (
+                <>
+                  {' '}
+                  <span className="badge ok">segredo elidido</span>
+                  <p className="small muted" style={{ margin: '6px 0 0' }}>
+                    O último segmento é o <code>ARRAY_WEBHOOK_TOKEN</code>, então a URL inteira é segredo: a API
+                    devolve <code>***</code> no lugar dele e o botão copia essa versão. A URL completa que você
+                    entrega ao Customer Success está no seu <code>.env</code> — leia de lá.
+                  </p>
+                </>
+              )}
             </dd>
             <dt>Rota desta POC</dt>
             <dd className="mono">{cfg?.localPath ?? '/api/webhooks/array/<ARRAY_WEBHOOK_TOKEN>'}</dd>
@@ -110,8 +124,15 @@ export function WebhooksPage() {
                 {configured ? 'configurado' : 'ausente — a rota responde 404'}
               </span>{' '}
               <span className="small muted">
-                comparado em tempo constante; nunca é logado, gravado nem devolvido
+                comparado em tempo constante; a POC nunca o grava nem o devolve (a listener URL sai elidida)
               </span>
+              <p className="small muted" style={{ margin: '6px 0 0' }}>
+                <span className="badge warn">ressalva</span> Segredo-no-path aparece no{' '}
+                <strong>access log do runtime</strong>: o <code>wrangler dev</code> imprime{' '}
+                <code>POST /api/webhooks/array/&lt;token&gt;</code> no terminal, e o mesmo vale para proxies e CDNs em
+                produção. É a fraqueza inerente do modelo (a Array não assina os webhooks). Trate o log como
+                sensível e rotacione o token.
+              </p>
             </dd>
             <dt>Assinatura da Array</dt>
             <dd>
@@ -120,7 +141,10 @@ export function WebhooksPage() {
           </dl>
           <p className="hint" style={{ marginBottom: 0 }}>
             Trate todo payload como <strong>notificação não confiável</strong>: reconfirme pela API antes de agir e
-            aplique idempotência por <code>reportKey</code>/id de evento. Rotacionar o token exige pedir a troca da URL
+            aplique idempotência por <code>reportKey</code>/id de evento — o listener desta POC já deduplica por{' '}
+            <code>id</code> (ou <code>eventType+reportKey+clientKey</code>) e marca como{' '}
+            <strong>NÃO PARSEÁVEL</strong> um corpo que não seja objeto JSON, respondendo <code>200</code> como a doc
+            exige. Rotacionar o token exige pedir a troca da URL
             ao Customer Success (aceite dois tokens durante a janela de rotação).
           </p>
         </Card>

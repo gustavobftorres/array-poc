@@ -109,12 +109,47 @@ export interface ResolvedIdentity {
   dob: string
   ssn: string
   address: Address
-  /** De onde a identidade veio. */
-  source: 'default' | 'persona' | 'json'
+  /** De onde a identidade veio. `discarded` = esvaziada por ser produção. */
+  source: 'default' | 'persona' | 'json' | 'discarded'
   slug?: string
   label: string
   confidence: PersonaConfidence
   note: string
+}
+
+/**
+ * Identidade DESCARTADA (W2-002).
+ *
+ * Em produção a persona de sandbox não é re-rotulada: ela é apagada. Todos os
+ * campos de PII ficam vazios, para que nenhum caminho de código possa mandar
+ * o SSN de uma persona (ou o SSN real que alguém digitou no `.env`) para o
+ * host de produção. Quem precisa da identidade tem de recusar a operação.
+ */
+export const DISCARDED_IDENTITY: ResolvedIdentity = {
+  firstName: '',
+  lastName: '',
+  dob: '',
+  ssn: '',
+  address: { street: '', city: '', state: '', zip: '' },
+  source: 'discarded',
+  label: '(descartada: ambiente de produção)',
+  confidence: 'unverified',
+  note: 'ARRAY_IDENTITY foi DESCARTADA (não apenas ignorada): em produção a POC não envia identidade nenhuma. Use o sandbox para semear personas.',
+}
+
+/** Invariante testável: uma identidade descartada não guarda NENHUM campo de PII. */
+export function identityIsEmpty(i: ResolvedIdentity): boolean {
+  return (
+    i.firstName === '' &&
+    i.lastName === '' &&
+    i.dob === '' &&
+    i.ssn === '' &&
+    i.address.street === '' &&
+    i.address.city === '' &&
+    i.address.state === '' &&
+    i.address.zip === '' &&
+    i.slug === undefined
+  )
 }
 
 export function personaToIdentity(p: Persona, source: 'default' | 'persona'): ResolvedIdentity {
@@ -157,6 +192,17 @@ export function resolveIdentity(raw: string | undefined): {
     try {
       const j = JSON.parse(value) as Record<string, unknown>
       const addr = (j.address ?? {}) as Record<string, unknown>
+      // W2-010: cada campo ausente cai no DEFAULT_IDENTITY — inclusive o SSN da
+      // persona default. Isso é conveniente, mas silencioso demais: o usuário
+      // acha que mandou a identidade dele. Listamos o que foi preenchido.
+      const defaulted: string[] = []
+      if (!str(j.firstName)) defaulted.push('firstName')
+      if (!str(j.lastName)) defaulted.push('lastName')
+      if (!str(j.dob)) defaulted.push('dob')
+      if (!str(j.ssn).replace(/\D/g, '')) defaulted.push('ssn')
+      for (const f of ['street', 'city', 'state', 'zip'] as const) {
+        if (!str(addr[f])) defaulted.push(`address.${f}`)
+      }
       const identity: ResolvedIdentity = {
         firstName: str(j.firstName) || DEFAULT_IDENTITY.firstName,
         lastName: str(j.lastName) || DEFAULT_IDENTITY.lastName,
@@ -173,7 +219,12 @@ export function resolveIdentity(raw: string | undefined): {
         confidence: 'unverified',
         note: 'Identidade vinda de JSON inline em ARRAY_IDENTITY — a POC não valida se ela existe no sandbox da Array.',
       }
-      return { identity }
+      return {
+        identity,
+        warning: defaulted.length
+          ? `ARRAY_IDENTITY (JSON) não trouxe ${defaulted.join(', ')} — esses campos foram preenchidos com a persona default ${DEFAULT_IDENTITY.label} (inclusive o SSN, se ele está na lista). Preencha todos os campos para não herdar dados da persona.`
+          : undefined,
+      }
     } catch {
       return {
         identity: DEFAULT_IDENTITY,

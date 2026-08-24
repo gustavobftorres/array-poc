@@ -42,7 +42,7 @@ Os binários disponíveis:
 | `PW_CHROMIUM=… node scripts/snippet-check.mjs` | **valida o snippet do Playground de verdade**: copia o snippet real de 5 componentes da UI, cola em HTML em branco, sobe um http-server local e abre no Chromium; afere HTML válido, custom element no DOM, ordem dos scripts, `appKey` de 36 chars, listener de `array-event` e ausência de `SyntaxError`. Desde o ciclo 5 também cola um snippet **hostil** (`true" onload="alert(1)` num atributo + nome de atributo inválido via `prompt`) e afere que nenhum handler executável chega ao DOM, que a árvore não desloca e que a linha `userToken` sai sempre com a explicação de origem/TTL | `snippet-check: 0 achado(s)`; artefatos em `scripts/.tmp-snippets/` |
 | `PW_CHROMIUM=… node scripts/regression-ciclo3.mjs` | checagens de navegador dos IDs V-005…V-020 (labels, auto-load, tiles, base em mock, hint do Inspector, catálogo, overflow mobile 8/8 — com `/integracao` —, console limpo) + `GET /api/status` por visita (W-014) e se o input de atributo ainda estoura (V-018/W-015) | uma linha por ID |
 | `PW_CHROMIUM=… node scripts/guide-check-ciclo6.mjs` | **prova que o Guia de Integração é colável** (ciclo 6): lê os 6 pares de snippet da tela, roda `bash -n` em cada `curl`, **executa** cada um contra o worker local com o host reescrito (exigindo `clientKey`/`authToken`/`userToken`/`reportKey`/`score` na resposta), compila cada snippet TypeScript com `tsc --strict`, e afere `appKey` em todo body, ausência de comentário dentro de header, selos verificado/inferido e o estado por passo (sessão limpa = 0/6; semeada = **1/6** desde o ciclo 9 — Y-001 tirou o passo 5 de "reportKey presente" e o pôs no evento `reportOrderedAt`, e o `/api/seed` pede o relatório no servidor) | `0 achado(s)` |
-| `PW_CHROMIUM=… node scripts/verify-guide-ciclo7.mjs` | **verificação independente do Guia (ciclo 7)**: sobe `scripts/fake-array-ciclo7.mjs` (Array falsa em `127.0.0.1:8899`, que devolve 401 se o `x-credmo-client-token` não for byte-a-byte o segredo e `Validation failed` se faltar `appKey`), extrai os 6 pares de snippet da **tela renderizada**, roda `bash -n`, **executa** cada curl com o host reescrito e compila cada TS com `tsc --strict` (usa `node_modules/.bin/tsc` — `npx tsc` tenta baixar pelo proxy e trava) | `verify-guide-ciclo7: 0 achado(s)` + a lista de requisições vistas (7 desde o ciclo 9: o `GET /report/v2` da Array falsa autentica pelo par `reportKey`+`displayToken`, não pelo client token, e o `PUT` de renovação passou a ser exercitado) |
+| `PW_CHROMIUM=… node scripts/verify-guide-ciclo7.mjs` | **verificação independente do Guia (ciclo 7)**: sobe `scripts/fake-array-ciclo7.mjs` (Array falsa em `127.0.0.1` numa **porta livre** — 8899 se estiver livre, senão efêmera, W2-014; que devolve 401 se o `x-credmo-client-token` não for byte-a-byte o segredo e `Validation failed` se faltar `appKey`), extrai os 6 pares de snippet da **tela renderizada**, roda `bash -n`, **executa** cada curl com o host reescrito e compila cada TS com `tsc --strict` (usa `node_modules/.bin/tsc` — `npx tsc` tenta baixar pelo proxy e trava) | `verify-guide-ciclo7: 0 achado(s)` + a lista de requisições vistas (7 desde o ciclo 9: o `GET /report/v2` da Array falsa autentica pelo par `reportKey`+`displayToken`, não pelo client token, e o `PUT` de renovação passou a ser exercitado) |
 | `node scripts/kv-poison-ciclo7.mjs` | envenena o **blob** de entradas legítimas do KV em 11 variantes (sem `scope`, `scope` divergente/nulo/prefixo, `expiresAt` vencido/na margem, `ttl` divergente, client token rotacionado) com caso de controle. Detalhe que custa tempo: **inserir linha nova no sqlite do miniflare não é visto** pelo namespace já aberto — só a reescrita do blob de uma chave existente funciona; os blobs ficam em `worker/.wrangler/state/v3/kv/local-cache/blobs/` | `kv-poison-ciclo7: 0 achado(s)` |
 | `PW_CHROMIUM=… node scripts/hostile-attrname-ciclo7.mjs` | 19 nomes de atributo hostis pelo `prompt` do Playground (case, espaços, homoglifos, `data-on*`, `formaction`, `href`, `xlink:href`, `background`) e cola cada snippet num HTML em branco instrumentado com `window.__pwned` | **19/19 recusados** desde o ciclo 9 (Y-004 fechou os 5 atributos de URL — `href`, `formaction`, `background`, `xlink:href`, `data-onload`); 0 execuções, 0 achados |
 | `PW_CHROMIUM=… node scripts/step-state-ciclo7.mjs` | os 6 estados de passo do Guia em 6 cenários com `localStorage` limpo; monta um componente **de verdade** stubando o CDN da Array por `page.route` (o botão é **Montar componente**, não há auto-mount) | limpa 0/6 · semeada **1/6** · enrollment 1/6 · KBA 2/6 · usertoken **2/6** · componente 1/6 · **0 achados desde o ciclo 11** (Z-001: o evento do passo 4 é escopado à aba pelo `sessionStorage` e limpo no **Desmontar**, na falha de carga do CDN e ao reabrir o Playground sem componente montado, então a aba 6b sem stub já não conta o mount de outra aba) |
@@ -50,7 +50,9 @@ Os binários disponíveis:
 | `PW_CHROMIUM=… node scripts/walkthrough-ciclo7.mjs` | 9 alvos (as telas + a rota inexistente) em desktop e mobile 390px, console, ≥400, tema (`☾ Escuro`/`☀ Claro`), F5 no meio do fluxo e a coerência da contagem de usuários; grava `docs/screenshots/qa7-*` | `0 achado(s)` desde o ciclo 9 (Y-006 corrigido: a tela imprime o `total`) |
 | `PW_CHROMIUM=… node scripts/regression-ciclo9.mjs` | **regressão independente dos 7 `Y-*` (ciclo 9)**: um veredito por ID com evidência própria — transpila `worker/src/dates.ts` com `esbuild` e varre 37 datas (dias 29/30/31, bissexto, virada de ano), recomputa a janela de consultas de 8 relatórios do JSON cru, extrai o `curl` do passo 6 da tela e o executa contra um **upstream próprio** que responde 401, `202`→`202`→`200` e `204` (o critério documentado, desde o ciclo 13) (o upstream roda em **outro processo** — `execFileSync` bloqueia o event loop, e um servidor no mesmo processo nunca aceitaria a conexão do curl), e cruza a recusa de nomes de atributo com os **20 atributos reais** da Array (§4.3 da pesquisa). Detalhe que custa tempo: sem `no_proxy=127.0.0.1` o `curl` do snippet vai para o proxy de egresso até para o loopback | `regression-ciclo9: 0 achado(s)` + `verdict.json` em `scripts/.tmp-ciclo9/` |
 | `PW_CHROMIUM=… node scripts/step4-stuck-ciclo9.mjs` | caracteriza o Z-001 em 3 cenários no mesmo `localStorage`: CDN stubado + **Montar componente** → **Desmontar** (elemento fora do DOM) → aba nova com o CDN bloqueado | desde o ciclo 11 (Z-001) os três batem com o DOM: **A** feito (`1/6`) · **B** **pendente** (`0/6`) — reabrir o Playground sem componente montado limpa o evento · **C** **pendente** (`0/6`) — outra aba não conta |
-| `npm --workspace worker run test` | vitest (139 testes desde o ciclo 13; inclui namespace do cache de userToken, idade por calendário, aritmética do relatório, normalização do `ARRAY_BASE_URL`, a invariante do `ARRAY_AUTH_MODE`, o polling 202/200/204 + timeout e o token/persistência do webhook) | 139 passed |
+| `npm --workspace worker run test` | vitest (163 testes desde o ciclo 15; inclui namespace do cache de userToken, idade por calendário, aritmética do relatório, normalização do `ARRAY_BASE_URL`, a invariante do `ARRAY_AUTH_MODE`, o polling 202/200/204 + timeout, o token/persistência do webhook e, desde o ciclo 15, o descarte da identidade em produção, o ambiente derivado do host, a elisão do token na listener URL e a idempotência do listener) | 163 passed |
+| `node scripts/integration-audit-ciclo5.mjs` | auditoria de integração do ciclo 5 (assume um Guia de **4** passos, que tem 6 desde o ciclo 6) | **3 achado(s) esperados** — número diferente é regressão (W2-013) |
+| `node scripts/pii-probe-ciclo11.mjs` | sonda independente de PII sobre `worker/src/redact.ts` e o estado local | **5 achado(s) esperados** — 4 sentinelas dentro dos envelopes `{_truncated,preview}`/`{raw}` e no sqlite bruto de `users` (por design) + a mensagem de erro do upstream não redigida (W2-013) |
 | `npm --workspace worker run typecheck` / `npm --workspace web run build` | tsc + vite | sem erros |
 
 Todos os `scripts/.tmp-*/` (`.tmp-snippets`, `.tmp-hostile`, `.tmp-attr7`, `.tmp-guide7`,
@@ -180,6 +182,50 @@ exercita mais o envelope de truncamento.
   não alcança o seu `localhost`, e não há API de registro: a `ARRAY_LISTENER_URL` é entregue ao
   Customer Success.
 
+## Ciclo 15 — fronteira sandbox ↔ produção e credibilidade do token do webhook
+
+- **O ambiente é derivado do HOST efetivo (W2-001).** `worker/wrangler.toml` não fixa mais
+  `ARRAY_ENV`. Com `ARRAY_BASE_URL` definida, o host decide: `sandbox.` → sandbox, qualquer outro
+  host remoto → produção; loopback não decide nada (aí `ARRAY_ENV` vale). Divergência é **erro
+  visível**: `GET /api/status` traz `envMismatch`, `arrayEnvSource` e um `warnings[]` com "contradiz
+  o host", o Dashboard mostra uma caixa vermelha e o boot imprime `[config] ERRO DE CONFIGURAÇÃO`.
+  ```bash
+  scripts/boot-worker-ciclo13.sh 8790 ARRAY_APP_KEY:AK ARRAY_SERVER_TOKEN:ST \
+    ARRAY_BASE_URL:https://array.io ARRAY_ENV:sandbox
+  curl -s localhost:8790/api/status | python3 -m json.tool | grep -E 'arrayEnv|componentsCdn|envMismatch'
+  # esperado: arrayEnv "production", CDN embed.array.io, envMismatch preenchido
+  ```
+- **A identidade é DESCARTADA em produção, não re-rotulada (W2-002).** `cfg.identity` fica vazia
+  (nenhum `ssn`/`dob`/endereço), `GET /api/personas` devolve `active.source: "discarded"` e
+  `POST /api/seed` responde **409 `identity_discarded`**. Repro do defeito antigo (hoje passa):
+  suba um upstream falso instrumentado, aponte `ARRAY_BASE_URL` para ele com `ARRAY_ENV:production`
+  e um `ARRAY_IDENTITY` com SSN inline; **nenhum** `POST /user/v2` deve chegar ao upstream.
+- **O token do webhook não sai pela listener URL (W2-003).** `/api/status`, `/api/webhooks/config`
+  e a tela Webhooks mostram `…/api/webhooks/array/***` (o botão copia essa versão elidida). A URL
+  completa vive só no `.env`.
+- **Ressalva honesta sobre o access log (W2-004).** A aplicação não loga o token, mas o
+  **runtime** loga: o `wrangler dev` imprime `POST /api/webhooks/array/<token> 200 OK` no stdout, e
+  proxies/CDNs fazem o mesmo em produção. Não há como a POC suprimir o log do runtime do wrangler,
+  então a afirmação "nunca logado" foi **removida** do README: o que valia era "a POC nunca o grava
+  nem o devolve". Ao rodar QA, trate o stdout do worker como sensível (`grep` no log do terminal
+  ACHA o token — isso é esperado, não é achado novo).
+- **Tetos de `ARRAY_POLL_*` (W2-006)**: intervalo ≤ 60 s, timeout ≤ 3600 s; acima disso a POC
+  clampa e avisa em vez de pendurar a requisição.
+- **Avisos novos de base URL**: `http://` para host remoto (W2-005) e path extra além de `/api`
+  (W2-007) aparecem em `warnings[]`.
+- **Listener mais duro (W2-009/W2-011)**: corpo que não é objeto JSON responde `200` (a doc exige)
+  mas com `parseable: false` e `event_type` marcado `(evento NÃO PARSEÁVEL: …)`; o mesmo evento
+  entregue duas vezes devolve `duplicate: true` e grava **uma** linha (dedupe por `id`, senão
+  `eventType+reportKey+clientKey`, coluna `dedupe_key` da migração `0003`); e o 404 do listener é
+  **idêntico** com e sem `ARRAY_WEBHOOK_TOKEN` configurado — a dica foi para o terminal.
+  Rode `npm run db:migrate` depois de atualizar (sem a migração o listener ainda grava, só não
+  deduplica).
+- **`GET /report/v2` com 200 e corpo vazio (W2-008)** virou erro tratado (502 `kind:"http"`,
+  mensagem "sem corpo") em vez de "relatório pronto vazio".
+- **`ARRAY_AUTH_MODE`: `client` e `user` são aliases documentados de `browser`** (W2-012).
+- **JSON parcial em `ARRAY_IDENTITY` avisa quais campos vieram da persona default** (W2-010),
+  inclusive o SSN.
+
 ## Ciclo 14 (QA) — sondas próprias das variáveis, do polling e do webhook
 
 Scripts do QA adversarial do ciclo 14 (relatório em `docs/VALIDATION_CICLO13.md`). Nenhum depende
@@ -196,16 +242,17 @@ do `npm run dev` já estar de pé, **exceto** o `walkthrough-ciclo13.mjs` (preci
 
 Passos não-óbvios aprendidos aqui (custam tempo):
 
-- **Portas fixas colidem.** `scripts/verify-guide-ciclo7.mjs` usa `127.0.0.1:8899` e
-  `scripts/regression-ciclo9.mjs` usa `8931`. Se outro processo (por exemplo o
-  `fake-upstream-ciclo13.mjs`, ou um worker de teste esquecido) ocupar a porta, os dois saem com
-  achados **falsos** — 5 e 8 respectivamente, com "requisições vistas: 0". Antes de acusar
-  regressão, confira as portas (W2-014).
+- **Portas fixas colidiam — corrigido no ciclo 15 (W2-014).** `verify-guide-ciclo7.mjs` e
+  `regression-ciclo9.mjs` usavam 8899 e 8931 fixas; com a porta ocupada saíam com **5 e 8 achados
+  falsos** ("requisições vistas: 0", "Y-002 NAO CORRIGIDO"). Agora os dois usam
+  `scripts/free-port.mjs`: a porta preferida se estiver livre, senão uma efêmera, e um
+  `waitForPort` que aborta com `ERRO DE HARNESS: … porta ocupada` e **exit 2** em vez de acusar o
+  produto. Dá para forçar a porta com `PORT=`/`PORT9=`.
 - **Matar worker de teste**: `kill` no PID do `wrangler` deixa o `workerd` vivo e a porta presa.
   Mate os dois (`ps -eo pid,args | grep -E "[w]rangler dev|[w]orkerd serve"`) e **não** derrube
   por engano o `workerd` do `:8787` (o do `npm run dev` tem dois processos `workerd`, um deles com
   `--socket-addr=entry=127.0.0.1:0`).
-- **Dois scripts saem com achado por design** e não estão na suíte do README:
+- **Dois scripts saem com achado por design** e agora ESTÃO na suíte do README (W2-013):
   `scripts/integration-audit-ciclo5.mjs` (**3 achados**: audita um Guia de 4 passos, que tem 6
   desde o ciclo 6) e `scripts/pii-probe-ciclo11.mjs` (**5 achados**: 4 são sentinelas dentro dos
   envelopes `{_truncated,preview}`/`{raw}` e do sqlite bruto da tabela `users`, por design; 1 é a

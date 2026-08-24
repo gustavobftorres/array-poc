@@ -860,6 +860,64 @@ describe('ARRAY_IDENTITY no seed e em /api/personas', () => {
     expect(json.productCode).toBe('credmo3bReportScore')
   })
 
+  // -------------------------------------------------------------------------
+  // W2-002 — em produção o seed é RECUSADO e nenhuma PII sai do worker.
+  // Antes: 200 com o SSN da persona (ou o digitado na variável) no corpo do
+  // POST /user/v2 para o host de produção.
+  // -------------------------------------------------------------------------
+  it('W2-002: POST /api/seed é recusado em produção, com motivo', async () => {
+    const res = await app.fetch(
+      new Request('http://local/api/seed', { method: 'POST' }),
+      withEnv({ ARRAY_ENV: 'production', ARRAY_IDENTITY: 'banker-coldiron' }),
+    )
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.seeded).toBe(false)
+    expect(json.kind).toBe('identity_discarded')
+    expect(JSON.stringify(json)).not.toContain('666230560')
+    expect(json.details.arrayEnv).toBe('production')
+  })
+
+  it('W2-002: seed recusado também quando só ARRAY_BASE_URL aponta para produção', async () => {
+    const res = await app.fetch(
+      new Request('http://local/api/seed', { method: 'POST' }),
+      withEnv({
+        ARRAY_BASE_URL: 'https://array.io',
+        ARRAY_ENV: 'sandbox',
+        ARRAY_IDENTITY: '{"firstName":"MARIA","lastName":"SILVA","ssn":"123456789"}',
+      }),
+    )
+    expect(res.status).toBe(409)
+    const text = JSON.stringify(await res.json())
+    expect(text).not.toContain('123456789')
+    expect(text).not.toContain('MARIA')
+  })
+
+  it('W2-001: /api/status nunca afirma um ambiente diferente do host chamado', async () => {
+    const res = await app.fetch(
+      new Request('http://local/api/status'),
+      withEnv({ ARRAY_BASE_URL: 'https://array.io', ARRAY_ENV: 'sandbox' }),
+    )
+    const json = await res.json()
+    expect(json.arrayEnv).toBe('production')
+    expect(json.baseUrl).toBe('https://array.io/api')
+    expect(json.componentsCdn).toBe('https://embed.array.io/cms/')
+    expect(json.arrayEnvSource).toBe('ARRAY_BASE_URL')
+    expect(json.envMismatch).toMatchObject({ declared: 'sandbox', effective: 'production' })
+    expect(json.warnings.join(' ')).toMatch(/contradiz o host/)
+    // E a identidade não vem com PII.
+    expect(JSON.stringify(json)).not.toContain('666230560')
+  })
+
+  it('W2-002: /api/personas em produção não devolve identidade ativa nenhuma', async () => {
+    const res = await app.fetch(new Request('http://local/api/personas'), withEnv({ ARRAY_ENV: 'production' }))
+    const json = await res.json()
+    expect(json.active.source).toBe('discarded')
+    expect(json.active.ssn).toBeNull()
+    expect(json.active.firstName).toBe('')
+    expect(JSON.stringify(json)).not.toContain('666230560')
+  })
+
   it('o seed respeita o ARRAY_PRODUCT_CODE', async () => {
     const res = await app.fetch(
       new Request('http://local/api/seed', { method: 'POST' }),

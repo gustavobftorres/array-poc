@@ -186,21 +186,59 @@ export interface WebhookEventRow {
  * Persiste um evento recebido no listener. O payload passa pela mesma redação
  * de PII/segredos do Inspector — o token do path NUNCA chega aqui.
  */
+/**
+ * W2-009 — procura um evento já gravado com a mesma chave de idempotência.
+ * Best-effort: se a coluna ainda não existe (migração 0003 não aplicada) a
+ * consulta falha e nós simplesmente não deduplicamos.
+ */
+export async function findWebhookEventByDedupeKey(db: D1Database, dedupeKey: string): Promise<string | null> {
+  try {
+    const row = await db
+      .prepare(`SELECT id FROM webhook_events WHERE dedupe_key = ? ORDER BY received_at DESC LIMIT 1`)
+      .bind(dedupeKey)
+      .first<{ id: string }>()
+    return row?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function insertWebhookEvent(
   db: D1Database,
-  args: { eventType: string; clientKey?: string | null; reportKey?: string | null; source: 'array' | 'simulated'; payload: unknown },
+  args: {
+    eventType: string
+    clientKey?: string | null
+    reportKey?: string | null
+    source: 'array' | 'simulated'
+    payload: unknown
+    dedupeKey?: string | null
+  },
 ) {
   const id = uid()
-  await safe('insertWebhookEvent', () =>
-    db
+  const ts = now()
+  const base = [id, ts, args.eventType, args.clientKey ?? null, args.reportKey ?? null, args.source, redactedJson(args.payload ?? null), ts]
+  try {
+    await db
       .prepare(
-        `INSERT INTO webhook_events (id, received_at, event_type, client_key, report_key, source, payload, created_at)
-         VALUES (?,?,?,?,?,?,?,?)`,
+        `INSERT INTO webhook_events (id, received_at, event_type, client_key, report_key, source, payload, created_at, dedupe_key)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
       )
-      .bind(id, now(), args.eventType, args.clientKey ?? null, args.reportKey ?? null, args.source, redactedJson(args.payload ?? null), now())
-      .run(),
-  )
-  return id
+      .bind(...base, args.dedupeKey ?? null)
+      .run()
+    return id
+  } catch {
+    // Banco sem a migração 0003: grava sem a chave em vez de perder o evento.
+    await safe('insertWebhookEvent', () =>
+      db
+        .prepare(
+          `INSERT INTO webhook_events (id, received_at, event_type, client_key, report_key, source, payload, created_at)
+           VALUES (?,?,?,?,?,?,?,?)`,
+        )
+        .bind(...base)
+        .run(),
+    )
+    return id
+  }
 }
 
 export async function listWebhookEvents(db: D1Database, limit = 50) {

@@ -36,7 +36,7 @@ Se você abriu este repo agora, a ordem que economiza tempo é:
 
 | Diretório | O que tem |
 |---|---|
-| `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, listener de webhook, 139 testes vitest |
+| `worker/` | API Hono (Workers) + D1 + KV, provider `mock` e provider `array` real, listener de webhook, 163 testes vitest |
 | `web/` | 9 telas React (Dashboard, Enrollment, KBA, Credit Report, Alerts, Guia de Integração, Webhooks, Web Components, API Inspector) |
 | `scripts/` | suítes de validação (HTTP, browser, snippets coláveis, envenenamento de KV, aritmética do relatório) |
 | `docs/` | pesquisa da API, plano, QA e os relatórios de validação por ciclo |
@@ -99,7 +99,7 @@ carregam sozinhas** ao abrir, e o relatório é re-buscado depois de um F5 usand
 Comandos úteis:
 
 ```bash
-npm --workspace worker run test        # vitest (139 testes)
+npm --workspace worker run test        # vitest (163 testes)
 npm --workspace web run build          # tsc -b + vite build
 npm --workspace worker run typecheck   # tsc --noEmit
 npm --workspace worker run dev         # só o worker
@@ -122,12 +122,27 @@ node scripts/verify-guide-ciclo7.mjs && node scripts/walkthrough-ciclo7.mjs
 node scripts/kv-poison-ciclo7.mjs && node scripts/report-audit-ciclo7.mjs 8
 node scripts/hostile-attrname-ciclo7.mjs && node scripts/step-state-ciclo7.mjs
 node scripts/regression-ciclo9.mjs
+node scripts/step4-stuck-ciclo9.mjs
+node scripts/walkthrough-ciclo13.mjs
+# Estes dois têm achados CONHECIDOS e inócuos (ver abaixo) — não são regressão:
+node scripts/integration-audit-ciclo5.mjs   # 3 achado(s) esperados
+node scripts/pii-probe-ciclo11.mjs          # 5 achado(s) esperados
 ```
 
-**Saída esperada**: `67 passed`, typecheck e build limpos, `pass=42 fail=0` no `smoke-api.sh` e
-**`0 achado(s)` em todos os scripts `.mjs`** — inclusive o `step-state-ciclo7.mjs`, que até o ciclo
-10 saía com `1 achado(s)` conhecido (o passo 4 preso em "feito"; corrigido no ciclo 11, Z-001).
-Qualquer achado agora é regressão.
+**Saída esperada**: `163 passed` (vitest), typecheck e build limpos, `pass=42 fail=0` no
+`smoke-api.sh` e **`0 achado(s)` nos scripts `.mjs` acima**, com duas exceções documentadas
+(W2-013):
+
+- `scripts/integration-audit-ciclo5.mjs` → **3 achado(s)**: o script audita um Guia de 4 passos e o
+  Guia tem 6 desde o ciclo 6; a expectativa é que está velha, não o produto.
+- `scripts/pii-probe-ciclo11.mjs` → **5 achado(s)**: 4 são sentinelas dentro dos envelopes
+  `{_truncated,preview}` / `{raw}` e do sqlite bruto da tabela `users` (por design, documentado
+  abaixo); o 5º é a mensagem de erro do upstream, que não é redigida.
+
+O `step-state-ciclo7.mjs` saía com `1 achado(s)` até o ciclo 10 (passo 4 preso em "feito"; corrigido
+no ciclo 11, Z-001) — hoje sai em 0. Qualquer outro achado é regressão. Os scripts que sobem
+upstream falso escolhem **porta livre** e falham com `ERRO DE HARNESS: … porta ocupada` em vez de
+acusar o produto (W2-014).
 
 ## Onde colar as chaves
 
@@ -150,7 +165,7 @@ de mudar:
 ```ini
 ARRAY_APP_KEY=<appKey da Array>          # UUID de 36 chars, público por design
 ARRAY_SERVER_TOKEN=<client token>        # SEGREDO: header x-credmo-client-token, só no worker
-ARRAY_ENV=sandbox                        # sandbox | production
+# ARRAY_ENV=sandbox                      # FALLBACK: só decide sem ARRAY_BASE_URL
 ARRAY_AUTH_MODE=server                   # server (default) | browser
 ARRAY_POLL_INTERVAL=1.0                  # segundos (unidade INFERIDA)
 ARRAY_POLL_TIMEOUT=120                   # segundos (unidade INFERIDA)
@@ -168,15 +183,15 @@ Significado, obrigatoriedade e nível de confiança de cada uma:
 |---|---|---|---|
 | `ARRAY_APP_KEY` | **sim** | — | `appKey` da Array (UUID de 36 chars). Vai no **corpo** das chamadas e no HTML dos componentes: público por design. |
 | `ARRAY_SERVER_TOKEN` | **sim** | — | O segredo de servidor, enviado como header `x-credmo-client-token`. Nunca vai ao browser. |
-| `ARRAY_BASE_URL` | não | derivado de `ARRAY_ENV` | Host da API. Aceita **com ou sem** `/api` (`https://sandbox.array.io` funciona: a POC normaliza para `.../api`), com barra no fim e com host de produção. Sem `ARRAY_ENV` explícito, um host não-sandbox liga o ambiente de **produção** (e o CDN de produção). |
-| `ARRAY_ENV` | não | `sandbox` | `sandbox` \| `production`. Decide base URL (quando não há override) e o CDN dos componentes. |
-| `ARRAY_AUTH_MODE` | não | `server` | Trava explícita. `server`: as chamadas saem do worker com `x-credmo-client-token`. `browser`: usam `x-credmo-user-token` e o client token **nunca** é anexado — uma chamada sem `userToken` falha (HTTP 409, `kind: auth_mode`) em vez de vazar o segredo. |
-| `ARRAY_IDENTITY` | não | `banker-coldiron` | Persona de teste **do sandbox**: slug (`banker-coldiron`, `dalton-lot`, `denise-hennessy`, `donald-blair`) ou JSON inline. Pré-preenche o Enrollment e o `/api/seed`. **Ignorada em produção.** |
+| `ARRAY_BASE_URL` | não | derivado de `ARRAY_ENV` | Host da API. Aceita **com ou sem** `/api` (`https://sandbox.array.io` funciona: a POC normaliza para `.../api`) e com barra no fim. **Quando está definida, o host DECIDE o ambiente** (`sandbox.…` → sandbox; qualquer outro host remoto → produção, com o CDN de produção); `ARRAY_ENV` passa a ser só fallback. Host de loopback (`127.0.0.1`/`localhost`, o upstream falso de dev/QA) não afirma ambiente: aí `ARRAY_ENV` decide. `http://` para host **remoto** gera aviso (o client token sairia em texto claro); path extra além de `/api` gera aviso (a POC acrescenta `/api` no fim). |
+| `ARRAY_ENV` | não | `sandbox` | `sandbox` \| `production`. **Fallback**: decide o ambiente só quando `ARRAY_BASE_URL` está ausente (ou é loopback). Se contradisser o host efetivo, o **host manda** e a divergência aparece como **erro** no `/api/status` (`envMismatch`), no Dashboard e no log de boot — nenhuma tela pode afirmar um ambiente diferente do host que está sendo chamado. Por isso `worker/wrangler.toml` **não** fixa mais essa variável. |
+| `ARRAY_AUTH_MODE` | não | `server` | Trava explícita. `server`: as chamadas saem do worker com `x-credmo-client-token`. `browser`: usam `x-credmo-user-token` e o client token **nunca** é anexado — uma chamada sem `userToken` falha (HTTP 409, `kind: auth_mode`) em vez de vazar o segredo. Aliases aceitos de `browser`: **`client`** e **`user`** (mesmo efeito). Qualquer outro valor cai em `server` com aviso. |
+| `ARRAY_IDENTITY` | não | `banker-coldiron` | Persona de teste **do sandbox**: slug (`banker-coldiron`, `dalton-lot`, `denise-hennessy`, `donald-blair`) ou JSON inline. Pré-preenche o Enrollment e o `/api/seed`. **Em produção é DESCARTADA, não apenas ignorada**: a config guarda a identidade vazia (nenhum `ssn`/`dob`/endereço), `POST /api/seed` responde **409 `identity_discarded`** e o motivo aparece na UI e no boot. Um JSON parcial herda os campos ausentes da persona default (inclusive o SSN) — a POC avisa **quais**. |
 | `ARRAY_PRODUCT_CODE` | não | `credmo3bReportScore` | `productCode` default de `POST /report/v2`. |
-| `ARRAY_POLL_INTERVAL` | não | `1.0` | Intervalo do polling de `GET /report/v2`, em **segundos** (unidade `// UNVERIFIED`). |
-| `ARRAY_POLL_TIMEOUT` | não | `120` | Timeout do polling, em **segundos** (unidade `// UNVERIFIED`). Se as re-tentativas de bureau descritas por fonte terceira valerem para a sua conta, considere `300`. |
-| `ARRAY_LISTENER_URL` | não | — | A URL do **seu** listener de webhook. **Não existe API de registro**: você entrega essa URL ao seu representante de Customer Success da Array. A POC só a exibe (em `/api/status` e na tela Webhooks) para você saber o que informar. |
-| `ARRAY_WEBHOOK_TOKEN` | não | — | Segredo **gerado por você** que vive no *path* do listener (`POST /api/webhooks/array/<token>`), comparado em tempo constante e nunca logado. Interpretação `// UNVERIFIED`: a Array **não** assina os webhooks nem manda headers customizados, então a URL secreta é a única autenticação possível. |
+| `ARRAY_POLL_INTERVAL` | não | `1.0` | Intervalo do polling de `GET /report/v2`, em **segundos** (unidade `// UNVERIFIED`). Teto de sanidade **60 s**: acima disso é clampado com aviso. |
+| `ARRAY_POLL_TIMEOUT` | não | `120` | Timeout do polling, em **segundos** (unidade `// UNVERIFIED`). Se as re-tentativas de bureau descritas por fonte terceira valerem para a sua conta, considere `300`. Teto de sanidade **3600 s**: acima disso é clampado com aviso (um `1e9` escorregado pendurava a requisição indefinidamente). |
+| `ARRAY_LISTENER_URL` | não | — | A URL do **seu** listener de webhook. **Não existe API de registro**: você entrega essa URL ao seu representante de Customer Success da Array. A POC a exibe (em `/api/status`, `/api/webhooks/config` e na tela Webhooks) **com o último segmento elidido** (`…/api/webhooks/array/***`), porque esse segmento é o `ARRAY_WEBHOOK_TOKEN`. A URL completa vive só no seu `.env`. |
+| `ARRAY_WEBHOOK_TOKEN` | não | — | Segredo **gerado por você** que vive no *path* do listener (`POST /api/webhooks/array/<token>`), comparado em tempo constante. A POC **não** o devolve em resposta nenhuma e **não** o grava (nem na auditoria: o path é mascarado antes). **Ressalva honesta**: segredo-no-path aparece no **access log do runtime** — o `wrangler dev` imprime `POST /api/webhooks/array/<token> 200 OK` no terminal, e proxies/CDNs fazem o mesmo em produção. Não há como a aplicação suprimir o log do runtime; trate o terminal como sensível e rotacione o token. Interpretação `// UNVERIFIED`: a Array **não** assina os webhooks nem manda headers customizados, então a URL secreta é a única autenticação possível. |
 
 Aliases: `ARRAY_CLIENT_TOKEN` é aceito como sinônimo de `ARRAY_SERVER_TOKEN` (é o mesmo segredo e o
 mesmo header). Os nomes `SMARTY_AUTH_ID` / `SMARTY_AUTH_TOKEN` continuam aceitos como **aliases
@@ -192,7 +207,7 @@ validação verdes; o Guia de Integração inteiro (`curl` e TypeScript colávei
 Array falsa em `scripts/fake-array-ciclo7.mjs`); o Inspector com segredo e PII redigidos; o cache de
 `userToken` isolado por modo/appKey/baseUrl/client token.
 
-**O que muda quando você preenche `worker/.dev.vars` e reinicia** (`ARRAY_ENV=sandbox`): enrollment,
+**O que muda quando você preenche `worker/.dev.vars` e reinicia** (sandbox, o default): enrollment,
 KBA, `usertoken` e report passam a chamar `https://sandbox.array.io/api` pelos paths **verificados**
 (§3.1–§3.6 da pesquisa) e devem responder. O que pode falhar, em ordem de probabilidade:
 
@@ -268,7 +283,7 @@ por consumidor) — não existe um terceiro "server token".
 | `GET /api/array/users` | lista o D1 local — pagina (`?limit=` 1–200, default 50; `?limit=` vazio = default, não mínimo) e devolve `total` à parte |
 | `GET /api/personas` | — (personas de sandbox conhecidas + a ativa em `ARRAY_IDENTITY`) |
 | `POST /api/webhooks/array/:token` | — (**listener** local; segredo no path, comparado em tempo constante) |
-| `GET /api/webhooks/config` | — (o que informar ao Customer Success; nunca devolve o token) |
+| `GET /api/webhooks/config` | — (o que informar ao Customer Success; a listener URL sai com o segredo elidido e o token nunca é devolvido) |
 | `GET`/`DELETE /api/webhooks/events` | — (eventos recebidos, no D1) |
 | `POST /api/webhooks/simulate` | — (simula um evento localmente: a Array não chama o seu `localhost`) |
 | `GET /api/array/authenticate` | `GET /authenticate/v2` (perguntas KBA + `authToken`) |

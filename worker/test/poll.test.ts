@@ -136,6 +136,17 @@ function client(responses: Response[], extra: Record<string, unknown> = {}) {
 }
 
 describe('ArrayClient.getReport', () => {
+  // W2-008 — 200 com corpo VAZIO é upstream malformado, não relatório pronto.
+  it('W2-008: 200 sem corpo vira erro tratado, não relatório vazio', async () => {
+    const c = client([new Response('', { status: 200 })])
+    const err = await c.client
+      .getReport({ reportKey: 'RK', displayToken: 'DT', clientKey: 'CK', productCode: 'P' } as never)
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(ArrayApiError)
+    expect((err as ArrayApiError).kind).toBe('http')
+    expect((err as ArrayApiError).message).toMatch(/sem corpo/)
+  })
+
   it('faz o polling real: 202, 202, 200', async () => {
     const c = client([jsonRes(202), jsonRes(202), jsonRes(200, { reportKey: 'RK', score: 712 })])
     const report = await c.client.getReport({ reportKey: 'RK', displayToken: 'DT' })

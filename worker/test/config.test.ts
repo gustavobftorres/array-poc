@@ -4,11 +4,15 @@ import {
   DEFAULT_POLL_TIMEOUT_S,
   DEFAULT_PRODUCT_CODE,
   getConfig,
+  MAX_POLL_INTERVAL_S,
+  MAX_POLL_TIMEOUT_S,
   normalizeBaseUrl,
   publicStatus,
   PROD_BASE_URL,
+  PROD_COMPONENTS_CDN,
   SANDBOX_BASE_URL,
 } from '../src/config'
+import { DEFAULT_IDENTITY, identityIsEmpty } from '../src/personas'
 
 describe('config / mode', () => {
   it('falls back to mock with no credentials', () => {
@@ -125,10 +129,52 @@ describe('ARRAY_BASE_URL normalization', () => {
     expect(cfg.componentsCdn).toBe('https://embed.array.io/cms/')
   })
 
-  it('lets an explicit ARRAY_ENV win over the host heuristic', () => {
+  // W2-001: o HOST manda. `ARRAY_ENV=sandbox` com base em `array.io` era
+  // exatamente o defeito (Dashboard dizendo "sandbox" chamando produção).
+  it('derives the environment from the effective host, with ARRAY_ENV only as fallback', () => {
     const cfg = getConfig({ ARRAY_BASE_URL: 'https://array.io', ARRAY_ENV: 'sandbox' })
-    expect(cfg.arrayEnv).toBe('sandbox')
+    expect(cfg.arrayEnv).toBe('production')
+    expect(cfg.arrayEnvSource).toBe('ARRAY_BASE_URL')
     expect(cfg.baseUrl).toBe('https://array.io/api')
+    expect(cfg.componentsCdn).toBe(PROD_COMPONENTS_CDN)
+    expect(cfg.envMismatch).toEqual({ declared: 'sandbox', effective: 'production', host: 'array.io' })
+    expect(cfg.warnings.join(' ')).toMatch(/contradiz o host/)
+  })
+
+  it('keeps ARRAY_ENV in charge when there is no ARRAY_BASE_URL', () => {
+    expect(getConfig({ ARRAY_ENV: 'production' }).arrayEnvSource).toBe('ARRAY_ENV')
+    expect(getConfig({ ARRAY_ENV: 'production' }).baseUrl).toBe(PROD_BASE_URL)
+    expect(getConfig({}).arrayEnvSource).toBe('default')
+  })
+
+  it('lets ARRAY_ENV decide for a loopback base URL (fake upstream of dev/QA)', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'http://127.0.0.1:8905', ARRAY_ENV: 'production' })
+    expect(cfg.arrayEnv).toBe('production')
+    expect(cfg.hostClass).toBe('local')
+    expect(cfg.envMismatch).toBeNull()
+    // http:// para loopback é legítimo e não deve avisar (W2-005).
+    expect(cfg.warnings.join(' ')).not.toMatch(/TEXTO CLARO/)
+  })
+
+  it('a sandbox host with ARRAY_ENV=production is a visible mismatch too', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'https://sandbox.array.io', ARRAY_ENV: 'production' })
+    expect(cfg.arrayEnv).toBe('sandbox')
+    expect(cfg.envMismatch?.declared).toBe('production')
+    expect(cfg.warnings.join(' ')).toMatch(/contradiz o host/)
+  })
+
+  // W2-005
+  it('warns when http:// points at a REMOTE host (client token in clear text)', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'http://sandbox.array.io' })
+    expect(cfg.baseUrl).toBe('http://sandbox.array.io/api')
+    expect(cfg.warnings.join(' ')).toMatch(/TEXTO CLARO/)
+  })
+
+  // W2-007
+  it('warns when an extra path is patched into the base URL', () => {
+    const cfg = getConfig({ ARRAY_BASE_URL: 'https://sandbox.array.io/api/v2' })
+    expect(cfg.baseUrl).toBe('https://sandbox.array.io/api/v2/api')
+    expect(cfg.warnings.join(' ')).toMatch(/path extra/)
   })
 
   it('falls back to the ARRAY_ENV host (with a warning) on a broken value', () => {
@@ -250,11 +296,57 @@ describe('ARRAY_IDENTITY', () => {
     expect(cfg.warnings.join(' ')).toMatch(/ARRAY_IDENTITY/)
   })
 
-  it('is IGNORED in production (personas only exist in sandbox)', () => {
+  // ---------------------------------------------------------------------
+  // W2-002 — em produção a identidade é DESCARTADA (esvaziada), não só
+  // re-rotulada. Antes o spread preservava ssn/dob/endereço e o /api/seed
+  // mandava tudo para o host de produção.
+  // ---------------------------------------------------------------------
+  it('is DISCARDED (emptied) in production, not just relabelled', () => {
     const cfg = getConfig({ ARRAY_ENV: 'production', ARRAY_IDENTITY: 'dalton-lot' })
-    expect(cfg.warnings.join(' ')).toMatch(/persona de teste do SANDBOX/)
-    expect(cfg.identity.source).toBe('default')
-    expect(publicStatus(cfg).identity.sandboxOnly).toBe(true)
+    expect(cfg.identityDiscarded).toBe(true)
+    expect(cfg.identity.source).toBe('discarded')
+    expect(identityIsEmpty(cfg.identity)).toBe(true)
+    expect(cfg.identity.ssn).toBe('')
+    expect(cfg.identity.dob).toBe('')
+    expect(cfg.identity.address.street).toBe('')
+    expect(cfg.warnings.join(' ')).toMatch(/DESCARTADA/)
+    expect(publicStatus(cfg).identity.discarded).toBe(true)
+  })
+
+  it('never keeps a user-typed SSN in production, whatever the host route', () => {
+    const inline = '{"firstName":"MARIA","lastName":"SILVA","ssn":"123456789"}'
+    for (const env of [
+      { ARRAY_ENV: 'production', ARRAY_IDENTITY: inline },
+      { ARRAY_BASE_URL: 'https://array.io', ARRAY_IDENTITY: inline },
+      { ARRAY_BASE_URL: 'https://array.io', ARRAY_ENV: 'sandbox', ARRAY_IDENTITY: inline },
+    ]) {
+      const cfg = getConfig(env)
+      expect(cfg.arrayEnv).toBe('production')
+      expect(JSON.stringify(cfg.identity)).not.toContain('123456789')
+      expect(JSON.stringify(cfg.identity)).not.toContain('MARIA')
+      // Invariante: nenhum campo de PII sobra no objeto de config.
+      expect(identityIsEmpty(cfg.identity)).toBe(true)
+    }
+  })
+
+  it('keeps every persona SSN out of production even without ARRAY_IDENTITY', () => {
+    const cfg = getConfig({ ARRAY_ENV: 'production' })
+    expect(identityIsEmpty(cfg.identity)).toBe(true)
+    expect(JSON.stringify(cfg.identity)).not.toContain('666')
+  })
+
+  // W2-010 — JSON parcial herdava o SSN da persona default sem dizer nada.
+  it('warns which fields a partial ARRAY_IDENTITY JSON inherited from the default persona', () => {
+    const cfg = getConfig({ ARRAY_IDENTITY: '{"firstName":"MARIA"}' })
+    expect(cfg.identity.ssn).toBe(DEFAULT_IDENTITY.ssn)
+    expect(cfg.warnings.join(' ')).toMatch(/ssn/)
+    expect(cfg.warnings.join(' ')).toMatch(/persona default/)
+    // Um JSON completo não avisa nada.
+    const full = getConfig({
+      ARRAY_IDENTITY:
+        '{"firstName":"MARIA","lastName":"SILVA","dob":"1990-01-01","ssn":"666000111","address":{"street":"1 A ST","city":"X","state":"TX","zip":"70000"}}',
+    })
+    expect(full.warnings).toEqual([])
   })
 })
 
@@ -262,17 +354,51 @@ describe('ARRAY_IDENTITY', () => {
 // Webhook config
 // ---------------------------------------------------------------------------
 
+// W2-006 — teto de sanidade para ARRAY_POLL_*
+describe('ARRAY_POLL_* clamp (W2-006)', () => {
+  it('clampa um timeout absurdo com aviso em vez de pendurar a requisição', () => {
+    const cfg = getConfig({ ARRAY_POLL_TIMEOUT: '1e9' })
+    expect(cfg.pollTimeoutMs).toBe(MAX_POLL_TIMEOUT_S * 1000)
+    expect(cfg.warnings.join(' ')).toMatch(/teto de sanidade/)
+  })
+
+  it('clampa um intervalo absurdo com aviso', () => {
+    const cfg = getConfig({ ARRAY_POLL_INTERVAL: '1000000' })
+    expect(cfg.pollIntervalMs).toBe(MAX_POLL_INTERVAL_S * 1000)
+    expect(cfg.warnings.join(' ')).toMatch(/teto de sanidade/)
+  })
+
+  it('valores plausíveis continuam intactos e sem aviso', () => {
+    const cfg = getConfig({ ARRAY_POLL_INTERVAL: '2.5', ARRAY_POLL_TIMEOUT: '300' })
+    expect(cfg.pollIntervalMs).toBe(2500)
+    expect(cfg.pollTimeoutMs).toBe(300000)
+    expect(cfg.warnings).toEqual([])
+  })
+})
+
 describe('webhook config', () => {
   it('reports the listener URL and never the token', () => {
     const cfg = getConfig({ ARRAY_LISTENER_URL: 'https://meu.host/api/webhooks/array/abc', ARRAY_WEBHOOK_TOKEN: 'SEGREDO-DO-PATH' })
     const status = publicStatus(cfg)
+    // W2-003: o segredo vive no PATH, então a URL inteira é segredo — sai elidida.
     expect(status.webhook).toMatchObject({
-      listenerUrl: 'https://meu.host/api/webhooks/array/abc',
+      listenerUrl: 'https://meu.host/api/webhooks/array/***',
+      listenerUrlMasked: true,
       configured: true,
       secretInPathInferred: true,
       registrationIsManual: true,
     })
     expect(JSON.stringify(status.webhook)).not.toContain('SEGREDO-DO-PATH')
+  })
+
+  it('elides the token even when it appears elsewhere in the listener URL', () => {
+    const cfg = getConfig({
+      ARRAY_LISTENER_URL: 'https://meu.host/hooks/SEGREDO-DO-PATH?k=SEGREDO-DO-PATH',
+      ARRAY_WEBHOOK_TOKEN: 'SEGREDO-DO-PATH',
+    })
+    expect(cfg.listenerUrlMasked).toBe('https://meu.host/hooks/***?k=***')
+    expect(cfg.listenerUrlHadSecret).toBe(true)
+    expect(JSON.stringify(publicStatus(cfg))).not.toContain('SEGREDO-DO-PATH')
   })
 
   it('reports "not configured" without ARRAY_WEBHOOK_TOKEN', () => {

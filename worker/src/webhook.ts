@@ -42,11 +42,46 @@ export function maskWebhookPath(path: string): string {
   return path.replace(/^(\/api\/webhooks\/array)\/[^/]+/, '$1/***')
 }
 
+/**
+ * W2-003 — elide o `ARRAY_WEBHOOK_TOKEN` de dentro da `ARRAY_LISTENER_URL`.
+ *
+ * O formato documentado embute o segredo no PATH
+ * (`https://seu.host/api/webhooks/array/<ARRAY_WEBHOOK_TOKEN>`), então devolver
+ * a URL "só informativa" era devolver o segredo. Elidimos:
+ *  - o último segmento de `/api/webhooks/array/<...>`;
+ *  - qualquer segmento de path igual ao token configurado;
+ *  - qualquer valor de query igual ao token.
+ * O resto da URL (host e caminho) continua visível, que é o que o usuário
+ * precisa conferir.
+ */
+export function maskListenerUrl(url: string, token: string): string {
+  const raw = (url ?? '').trim()
+  if (!raw) return ''
+  let masked = raw.replace(/(\/api\/webhooks\/array\/)[^/?#]+/i, '$1***')
+  const t = (token ?? '').trim()
+  if (t) {
+    // Split/join em vez de regex: o token é dado do usuário, não padrão.
+    masked = masked.split(t).join('***')
+  }
+  return masked
+}
+
 export interface NormalizedWebhookEvent {
   eventType: string
   clientKey: string | null
   reportKey: string | null
   payload: unknown
+  /**
+   * W2-009: `false` quando o corpo não é um objeto JSON (JSON inválido, corpo
+   * vazio, array, escalar). A doc exige responder 200, mas o evento não pode
+   * se passar por evento bem-formado.
+   */
+  parseable: boolean
+  /**
+   * Chave de idempotência (W2-009): id do evento se houver, senão
+   * `eventType + reportKey/clientKey`. `null` quando não há como deduplicar.
+   */
+  dedupeKey: string | null
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
@@ -58,15 +93,40 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
  * sem descartar nada. O payload é tratado como NOTIFICAÇÃO NÃO CONFIÁVEL:
  * nada aqui é usado como verdade sem reconfirmar pela API.
  */
-export function normalizeWebhookEvent(body: unknown): NormalizedWebhookEvent {
-  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+export function normalizeWebhookEvent(
+  body: unknown,
+  opts: { unparseable?: boolean } = {},
+): NormalizedWebhookEvent {
+  const isObject = !!body && typeof body === 'object' && !Array.isArray(body)
+  const parseable = !opts.unparseable && isObject
+  if (!parseable) {
+    const why = opts.unparseable
+      ? 'corpo não é JSON válido'
+      : body === undefined || body === null
+        ? 'corpo vazio'
+        : Array.isArray(body)
+          ? 'corpo é um array, não um objeto'
+          : `corpo é um ${typeof body}, não um objeto`
+    return {
+      eventType: `(evento NÃO PARSEÁVEL: ${why})`,
+      clientKey: null,
+      reportKey: null,
+      payload: { _unparseable: true, reason: why, raw: body ?? null },
+      parseable: false,
+      dedupeKey: null,
+    }
+  }
+  const b = body as Record<string, unknown>
   const nested = (b.data && typeof b.data === 'object' ? (b.data as Record<string, unknown>) : {}) as Record<string, unknown>
   const eventType =
     str(b.eventType) || str(b.event) || str(b.type) || str(b.name) || str(nested.eventType) || '(sem eventType no corpo)'
-  return {
-    eventType,
-    clientKey: str(b.clientKey) || str(nested.clientKey) || null,
-    reportKey: str(b.reportKey) || str(nested.reportKey) || null,
-    payload: body ?? null,
-  }
+  const clientKey = str(b.clientKey) || str(nested.clientKey) || null
+  const reportKey = str(b.reportKey) || str(nested.reportKey) || null
+  const eventId = str(b.id) || str(b.eventId) || str(nested.id) || str(nested.eventId)
+  const dedupeKey = eventId
+    ? `id:${eventId}`
+    : reportKey || clientKey
+      ? `evt:${eventType}|${reportKey ?? ''}|${clientKey ?? ''}`
+      : null
+  return { eventType, clientKey, reportKey, payload: body ?? null, parseable: true, dedupeKey }
 }
