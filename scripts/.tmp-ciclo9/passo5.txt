@@ -1,0 +1,47 @@
+5
+Pedir o relatório
+SERVIDOR
+verificado
+pendente
+Array
+POST /report/v2
+Nesta POC
+POST /api/array/report
+Produz
+reportKey + displayToken
+O que o SEU backend implementa
+Um endpoint seu (ex.: POST /credito/relatorio) que pede o relatório para o clientKey do usuário logado, com o productCode do seu plano.
+Só funciona para consumidor AUTENTICADO (passo 2): sem KBA aprovada não há relatório.
+Guardar reportKey + displayToken: são credenciais de leitura daquele relatório, não identificadores públicos.
+Autenticar com o client token (do servidor) ou com x-credmo-user-token (do dispositivo do usuário).
+É este passo que dá origem ao par reportKey/displayToken usado pelo modo manual do Playground e pelos componentes array-credit-report / array-credit-score.
+O que é fato e o que é inferência
+verificado Rota POST /report/v2, corpo com clientKey + productCode e a resposta { reportKey, displayToken }.
+verificado productCode credmo3bReportScore (3 bureaus + score) e exp1bScore (Experian) vistos em produção.
+// UNVERIFIED A lista completa de productCodes (depende do plano) e se o appKey é obrigatório no corpo — esta POC o envia, como nas outras rotas.
+verificado Este pedido dispara webhook ("customer ordered a report") com clientKey, reportKey, displayToken e productCode (§3.10) — é a forma de reagir sem ficar consultando.
+Nesta sessão · POST /api/array/report feito nesta sessão
+pendente — existe reportKey na sessão, mas o relatório foi pedido pelo /api/seed (servidor), não por esta chamada. Rode Credit Report (ou Semear usuário demo) para ver o valor real aqui.
+
+O displayToken libera a leitura de UM relatório: trate-o como o userToken (curto, reinjetado, nunca em HTML estático ou cache de CDN).
+
+curl
+TypeScript
+Copiar
+# 0) segredos e chaves ficam no SHELL, não no snippet:
+#      export ARRAY_CLIENT_TOKEN='...'   # SEGREDO de servidor: nunca no browser
+#      export ARRAY_APP_KEY='...'        # público por design (36 caracteres)
+#      export CLIENT_KEY='...'           # do passo 1, já autenticado no passo 2
+
+curl -sS -X POST https://sandbox.array.io/api/report/v2 \
+  -H "content-type: application/json" \
+  -H "x-credmo-client-token: $ARRAY_CLIENT_TOKEN" \
+  -d @- <<JSON
+{
+  "appKey": "$ARRAY_APP_KEY",
+  "clientKey": "$CLIENT_KEY",
+  "productCode": "credmo3bReportScore"
+}
+JSON
+# -> { "reportKey": "9C1E...", "displayToken": "4A77..." }
+# export REPORT_KEY='9C1E...' DISPLAY_TOKEN='4A77...'
